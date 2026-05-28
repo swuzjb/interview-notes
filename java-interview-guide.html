@@ -52,6 +52,7 @@
             <a href="#concurrenthashmap">ConcurrentHashMap 实现</a>
             <a href="#virtual-threads">虚拟线程</a>
             <a href="#structured-concurrency">结构化并发</a>
+            <a href="#threadlocal">ThreadLocal</a>
           </div>
         </div>
         <div class="nav-group">
@@ -61,6 +62,7 @@
             <a href="#io-models">BIO / NIO / AIO 模型对比</a>
             <a href="#epoll">IO 多路复用与 epoll</a>
             <a href="#reactor">Reactor 模式与零拷贝</a>
+            <a href="#rate-limiting">限流算法</a>
           </div>
         </div>
       </nav>
@@ -2063,6 +2065,266 @@ Thread.startVirtualThread(() -&gt; doWork());</code></pre>
             <p><code>ScopedValue</code>（Java 21 Preview，Java 25 正式）用于在虚拟线程间传递上下文（如用户 ID、trace ID），比 ThreadLocal 更适合虚拟线程：不可变、自动随作用域清理、无父子线程继承导致的泄漏问题。典型用法：<code>ScopedValue.where(USER, currentUser).run(() -> handleRequest())</code>。</p>
         </div>
     </div>
+
+    <!-- 3.10 ThreadLocal -->
+    <div class="subsection" id="threadlocal">
+        <h3>3.10 ThreadLocal</h3>
+
+        <p>ThreadLocal 是线程级别的"私有变量"机制。它的设计灵感来自于栈帧的线程隔离性——既然栈是线程私有的，我们能否在堆上模拟线程私有存储？答案就是每个 Thread 对象内部持有的 ThreadLocalMap。</p>
+
+        <h4>ThreadLocal 原理</h4>
+        <p>每个 <code>Thread</code> 对象内部持有一个 <code>ThreadLocal.ThreadLocalMap</code>，这是一个定制化的哈希表。key 是 <code>ThreadLocal</code> 对象的<strong>弱引用</strong>（WeakReference），value 是线程私有的副本值。</p>
+
+        <div class="diagram">
+            <div class="diagram-title">ThreadLocal 内存结构</div>
+            <svg width="700" height="320" viewBox="0 0 700 320">
+                <!-- Thread objects -->
+                <rect x="20" y="20" width="180" height="120" rx="10" fill="rgba(59,130,246,0.08)" stroke="#3b82f6" stroke-width="2"/>
+                <text x="110" y="42" text-anchor="middle" fill="#3b82f6" font-size="12" font-weight="bold" font-family="Noto Sans SC">Thread-1</text>
+                <rect x="35" y="52" width="150" height="75" rx="6" fill="rgba(59,130,246,0.05)" stroke="#3b82f6" stroke-width="1" stroke-dasharray="4"/>
+                <text x="110" y="70" text-anchor="middle" fill="#3b82f6" font-size="10" font-family="JetBrains Mono">ThreadLocalMap</text>
+                <text x="110" y="88" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono">Entry[0]: TL1→"租户A"</text>
+                <text x="110" y="104" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono">Entry[1]: TL2→"trace-x"</text>
+                <text x="110" y="120" text-anchor="middle" fill="#64748b" font-size="8" font-family="JetBrains Mono">Entry[2]: null</text>
+
+                <!-- Thread 2 -->
+                <rect x="20" y="160" width="180" height="120" rx="10" fill="rgba(16,185,129,0.08)" stroke="#10b981" stroke-width="2"/>
+                <text x="110" y="182" text-anchor="middle" fill="#10b981" font-size="12" font-weight="bold" font-family="Noto Sans SC">Thread-2</text>
+                <rect x="35" y="192" width="150" height="75" rx="6" fill="rgba(16,185,129,0.05)" stroke="#10b981" stroke-width="1" stroke-dasharray="4"/>
+                <text x="110" y="210" text-anchor="middle" fill="#10b981" font-size="10" font-family="JetBrains Mono">ThreadLocalMap</text>
+                <text x="110" y="228" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono">Entry[0]: TL1→"租户B"</text>
+                <text x="110" y="244" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="JetBrains Mono">Entry[1]: TL2→"trace-y"</text>
+                <text x="110" y="260" text-anchor="middle" fill="#64748b" font-size="8" font-family="JetBrains Mono">Entry[2]: null</text>
+
+                <!-- ThreadLocal objects on heap -->
+                <rect x="350" y="60" width="160" height="50" rx="8" fill="rgba(245,158,11,0.1)" stroke="#f59e0b" stroke-width="2"/>
+                <text x="430" y="82" text-anchor="middle" fill="#f59e0b" font-size="11" font-weight="bold" font-family="JetBrains Mono">ThreadLocal TL1</text>
+                <text x="430" y="100" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="Noto Sans SC">tenantContext</text>
+
+                <rect x="350" y="130" width="160" height="50" rx="8" fill="rgba(245,158,11,0.1)" stroke="#f59e0b" stroke-width="2"/>
+                <text x="430" y="152" text-anchor="middle" fill="#f59e0b" font-size="11" font-weight="bold" font-family="JetBrains Mono">ThreadLocal TL2</text>
+                <text x="430" y="170" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="Noto Sans SC">traceIdHolder</text>
+
+                <!-- Weak reference arrows -->
+                <line x1="185" y1="85" x2="350" y2="85" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4" marker-end="url(#tl-w)"/>
+                <text x="260" y="78" fill="#f59e0b" font-size="8" font-family="Noto Sans SC">弱引用(key)</text>
+
+                <line x1="185" y1="100" x2="350" y2="155" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4" marker-end="url(#tl-w)"/>
+
+                <line x1="185" y1="225" x2="350" y2="85" stroke="#10b981" stroke-width="1.5" stroke-dasharray="4" marker-end="url(#tl-w)"/>
+                <line x1="185" y1="241" x2="350" y2="155" stroke="#10b981" stroke-width="1.5" stroke-dasharray="4" marker-end="url(#tl-w)"/>
+
+                <!-- Entry structure detail -->
+                <rect x="350" y="210" width="330" height="100" rx="8" fill="rgba(30,41,59,0.5)" stroke="#1e293b" stroke-width="1"/>
+                <text x="370" y="232" fill="#e2e8f0" font-size="11" font-weight="bold" font-family="Noto Sans SC">Entry 结构：</text>
+                <text x="370" y="253" fill="#94a3b8" font-size="10" font-family="JetBrains Mono">static class Entry extends WeakReference&lt;ThreadLocal&gt; {</text>
+                <text x="370" y="270" fill="#94a3b8" font-size="10" font-family="JetBrains Mono">    Object value;  <tspan fill="#64748b">// 强引用！</tspan></text>
+                <text x="370" y="287" fill="#94a3b8" font-size="10" font-family="JetBrains Mono">}</text>
+                <text x="370" y="305" fill="#ef4444" font-size="9" font-family="Noto Sans SC">key 是弱引用，value 是强引用 → 内存泄漏根源</text>
+
+                <defs>
+                    <marker id="tl-w" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#f59e0b"/></marker>
+                </defs>
+            </svg>
+        </div>
+
+        <div class="code-block">
+            <div class="code-header">
+                <div class="code-dots"><span></span><span></span><span></span></div>
+                <span>ThreadLocal 核心源码解读</span>
+            </div>
+            <pre><code><span class="cmt">// ThreadLocal.set() 源码简化</span>
+<span class="kw">public void</span> <span class="fn">set</span>(<span class="type">T</span> value) {
+    <span class="type">Thread</span> t = Thread.currentThread();
+    <span class="type">ThreadLocalMap</span> map = t.threadLocals;  <span class="cmt">// 获取当前线程的 map</span>
+    <span class="kw">if</span> (map != <span class="kw">null</span>)
+        map.set(<span class="kw">this</span>, value);  <span class="cmt">// key=当前ThreadLocal对象, value=值</span>
+    <span class="kw">else</span>
+        createMap(t, value);
+}
+
+<span class="cmt">// ThreadLocal.get() 源码简化</span>
+<span class="kw">public</span> <span class="type">T</span> <span class="fn">get</span>() {
+    <span class="type">Thread</span> t = Thread.currentThread();
+    <span class="type">ThreadLocalMap</span> map = t.threadLocals;
+    <span class="kw">if</span> (map != <span class="kw">null</span>) {
+        <span class="type">Entry</span> e = map.getEntry(<span class="kw">this</span>);
+        <span class="kw">if</span> (e != <span class="kw">null</span>) <span class="kw">return</span> (<span class="type">T</span>) e.value;
+    }
+    <span class="kw">return</span> setInitialValue();
+}
+
+<span class="cmt">// ThreadLocalMap 使用开放地址法（线性探测）解决哈希冲突</span>
+<span class="cmt">// 而非 HashMap 的链表法，因为 ThreadLocal 数量通常很少</span>
+<span class="cmt">// 初始容量 16，负载因子 2/3</span></code></pre>
+        </div>
+
+        <h4>内存泄漏问题</h4>
+
+        <p>ThreadLocal 的内存泄漏是面试的经典考点。Entry 的 key 是 ThreadLocal 的<strong>弱引用</strong>，当外部不再持有 ThreadLocal 强引用时，GC 会回收 ThreadLocal 对象，导致 key 变为 null。但 value 仍然是<strong>强引用</strong>，被 Entry 持有，而 Entry 被 ThreadLocalMap 持有，ThreadLocalMap 被 Thread 持有。只要线程不死，value 就无法被回收。</p>
+
+        <div class="code-block">
+            <div class="code-header">
+                <div class="code-dots"><span></span><span></span><span></span></div>
+                <span>内存泄漏场景与解决</span>
+            </div>
+            <pre><code><span class="cmt">// === 泄漏引用链 ===</span>
+<span class="cmt">// Thread → ThreadLocalMap → Entry[] → Entry(key=null, value=强引用)</span>
+<span class="cmt">//                                                    ↑ 无法回收！</span>
+
+<span class="cmt">// === 典型泄漏场景 ===</span>
+<span class="kw">public class</span> <span class="type">LeakExample</span> {
+    <span class="kw">public void</span> <span class="fn">process</span>() {
+        <span class="type">ThreadLocal</span>&lt;<span class="type">byte</span>[]&gt; tl = <span class="kw">new</span> <span class="type">ThreadLocal</span>&lt;&gt;();
+        tl.set(<span class="kw">new byte</span>[<span class="num">1024</span> * <span class="num">1024</span>]);  <span class="cmt">// 1MB 数据</span>
+        <span class="cmt">// ... 使用完后 tl 局部变量出栈，ThreadLocal对象失去强引用</span>
+        <span class="cmt">// 但 1MB 的 value 还被 ThreadLocalMap 的 Entry 强引用持有!</span>
+        <span class="cmt">// 如果线程是线程池中的，线程不会销毁 → 永久泄漏</span>
+    }
+}
+
+<span class="cmt">// === 解决方案：必须 remove() ===</span>
+<span class="kw">private static final</span> <span class="type">ThreadLocal</span>&lt;<span class="type">Context</span>&gt; CONTEXT = <span class="kw">new</span> <span class="type">ThreadLocal</span>&lt;&gt;();
+
+<span class="kw">public void</span> <span class="fn">handleRequest</span>() {
+    <span class="kw">try</span> {
+        CONTEXT.set(buildContext());
+        <span class="cmt">// ... 业务逻辑</span>
+    } <span class="kw">finally</span> {
+        CONTEXT.remove();  <span class="cmt">// 必须在 finally 中清理！</span>
+    }
+}
+
+<span class="cmt">// ThreadLocalMap 内部的"探测式清理"(expungeStaleEntry)：</span>
+<span class="cmt">// get/set/remove 时会清理遇到的 key=null 的 Entry</span>
+<span class="cmt">// 但这是被动清理，不保证及时性 → 仍必须主动 remove()</span></code></pre>
+        </div>
+
+        <div class="callout callout-warning">
+            <div class="callout-title">线程池场景：数据污染</div>
+            <p>线程池中的线程被复用，上一个任务设置的 ThreadLocal 值如果不清理，下一个任务会读到<strong>脏数据</strong>。这不仅是内存泄漏，更是<strong>业务正确性问题</strong>。例如：用户 A 的请求设置了租户上下文，线程归还池后被用户 B 复用，用户 B 读到了用户 A 的租户信息——这是严重的安全漏洞。</p>
+        </div>
+
+        <h4>支付场景实战应用</h4>
+
+        <div class="code-block">
+            <div class="code-header">
+                <div class="code-dots"><span></span><span></span><span></span></div>
+                <span>租户上下文 + TraceId 传递</span>
+            </div>
+            <pre><code><span class="cmt">// === 1. 租户上下文传递 ===</span>
+<span class="kw">public class</span> <span class="type">TenantContext</span> {
+    <span class="kw">private static final</span> <span class="type">ThreadLocal</span>&lt;<span class="type">String</span>&gt; TENANT_ID = <span class="kw">new</span> <span class="type">ThreadLocal</span>&lt;&gt;();
+
+    <span class="kw">public static void</span> <span class="fn">set</span>(<span class="type">String</span> tenantId) { TENANT_ID.set(tenantId); }
+    <span class="kw">public static</span> <span class="type">String</span> <span class="fn">get</span>() { <span class="kw">return</span> TENANT_ID.get(); }
+    <span class="kw">public static void</span> <span class="fn">clear</span>() { TENANT_ID.remove(); }
+}
+
+<span class="cmt">// 在 Filter/Interceptor 中设置</span>
+<span class="kw">public class</span> <span class="type">TenantFilter</span> <span class="kw">implements</span> <span class="type">Filter</span> {
+    <span class="kw">public void</span> <span class="fn">doFilter</span>(<span class="type">Request</span> req, <span class="type">Response</span> res, <span class="type">FilterChain</span> chain) {
+        <span class="kw">try</span> {
+            TenantContext.set(req.getHeader(<span class="str">"X-Tenant-Id"</span>));
+            chain.doFilter(req, res);
+        } <span class="kw">finally</span> {
+            TenantContext.clear();  <span class="cmt">// 必须清理</span>
+        }
+    }
+}
+
+<span class="cmt">// === 2. TraceId 全链路追踪 ===</span>
+<span class="kw">public class</span> <span class="type">TraceContext</span> {
+    <span class="kw">private static final</span> <span class="type">ThreadLocal</span>&lt;<span class="type">String</span>&gt; TRACE_ID = <span class="kw">new</span> <span class="type">ThreadLocal</span>&lt;&gt;();
+
+    <span class="kw">public static void</span> <span class="fn">init</span>() {
+        TRACE_ID.set(UUID.randomUUID().toString().replace(<span class="str">"-"</span>, <span class="str">""</span>));
+    }
+    <span class="kw">public static</span> <span class="type">String</span> <span class="fn">get</span>() { <span class="kw">return</span> TRACE_ID.get(); }
+    <span class="kw">public static void</span> <span class="fn">clear</span>() { TRACE_ID.remove(); }
+}
+<span class="cmt">// 配合 MDC (Mapped Diagnostic Context) 打印到日志</span>
+<span class="cmt">// MDC.put("traceId", TraceContext.get()); → logback %X{traceId}</span></code></pre>
+        </div>
+
+        <h4>InheritableThreadLocal vs TransmittableThreadLocal</h4>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr><th>方案</th><th>原理</th><th>适用场景</th><th>局限性</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><strong>InheritableThreadLocal</strong></td><td>子线程创建时拷贝父线程的值</td><td>new Thread() 直接创建子线程</td><td>线程池中无效（线程已提前创建）</td></tr>
+                    <tr><td><strong>TransmittableThreadLocal (TTL)</strong></td><td>提交任务时捕获，执行时恢复，完成后还原</td><td>线程池、异步框架</td><td>需要包装 Runnable/Callable 或使用 Agent</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="code-block">
+            <div class="code-header">
+                <div class="code-dots"><span></span><span></span><span></span></div>
+                <span>阿里 TTL: 线程池场景下的上下文传递</span>
+            </div>
+            <pre><code><span class="cmt">// === 问题：InheritableThreadLocal 在线程池中失效 ===</span>
+<span class="cmt">// 线程池中的线程在池创建时已经存在，不是"子线程创建"时刻</span>
+<span class="cmt">// 所以后续提交的任务无法继承提交者线程的 ThreadLocal 值</span>
+
+<span class="cmt">// === 阿里 TransmittableThreadLocal (TTL) 解决方案 ===</span>
+<span class="cmt">// 依赖: com.alibaba:transmittable-thread-local</span>
+
+<span class="cmt">// 1. 声明 TTL 变量</span>
+<span class="kw">private static final</span> <span class="type">TransmittableThreadLocal</span>&lt;<span class="type">String</span>&gt; TTL_CONTEXT
+    = <span class="kw">new</span> <span class="type">TransmittableThreadLocal</span>&lt;&gt;();
+
+<span class="cmt">// 2. 方式一：包装线程池 (推荐)</span>
+<span class="type">ExecutorService</span> pool = TtlExecutors.getTtlExecutorService(
+    Executors.newFixedThreadPool(<span class="num">4</span>)
+);
+
+TTL_CONTEXT.set(<span class="str">"parent-value"</span>);
+pool.submit(() -&gt; {
+    System.out.println(TTL_CONTEXT.get());  <span class="cmt">// "parent-value" ✓</span>
+});
+
+<span class="cmt">// 3. 方式二：Java Agent 无侵入（生产推荐）</span>
+<span class="cmt">// -javaagent:transmittable-thread-local-agent.jar</span>
+<span class="cmt">// Agent 会自动增强 JDK 线程池的 execute/submit 方法</span>
+<span class="cmt">// 无需修改业务代码，对 Runnable/Callable 自动捕获和恢复</span>
+
+<span class="cmt">// === TTL 内部原理（提交时 capture → 执行时 replay → 完成后 restore）===</span>
+<span class="cmt">// 1. capture(): 提交任务时，快照当前线程所有 TTL 变量的值</span>
+<span class="cmt">// 2. replay():  任务执行前，将快照值设置到执行线程</span>
+<span class="cmt">// 3. restore(): 任务执行后，恢复执行线程原来的值（避免污染）</span></code></pre>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>ThreadLocal 的 key 为什么设计为弱引用？如果是强引用会怎样？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>如果 key 是强引用，那么即使外部不再使用某个 ThreadLocal 对象（栈上的引用已经失效），由于 ThreadLocalMap 中的 Entry 强引用了它，ThreadLocal 对象本身也无法被 GC，更别说 value 了——两者都泄漏。设计为弱引用后，至少 ThreadLocal 对象本身可以被回收（key 变为 null），ThreadLocalMap 在后续操作中有机会清理这些"陈旧 Entry"（expungeStaleEntry）。<strong>弱引用不能完全避免泄漏</strong>（value 仍然泄漏），但它减小了泄漏的范围，是一种"防御性设计"。最终还是要靠 <code>remove()</code> 来彻底解决。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>虚拟线程时代，ThreadLocal 还能用吗？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>技术上可以，但<strong>不推荐</strong>。虚拟线程的核心优势是百万级并发，如果每个虚拟线程都持有 ThreadLocal 副本，内存开销会爆炸（百万线程 × 每个 ThreadLocal 副本）。Java 21+ 引入了 <code>ScopedValue</code> 作为替代：它是不可变的、自动随作用域清理的、对虚拟线程友好的上下文传递机制。面试回答策略：先说 ThreadLocal 原理和问题，再引出 ScopedValue 作为演进方向，展示技术视野。</p>
+            </div>
+        </div>
+
+        <div class="callout callout-insight">
+            <div class="callout-title">Doug Lea 视角</div>
+            <p>ThreadLocal 本质上是一种"空间换并发"的设计——通过让每个线程持有独立副本来避免同步开销。它的哈希表使用开放地址法而非链表法（我的 ConcurrentHashMap 用的是链表/红黑树），因为 ThreadLocal 数量通常很少（几个到几十个），开放地址法在低负载时缓存更友好。但这个设计在虚拟线程百万级并发场景下暴露了可扩展性的局限——这正是我参与推动 ScopedValue 设计的原因之一。</p>
+        </div>
+    </div>
 </section>
 <!-- ============================================================ -->
 <section class="section" id="network-io">
@@ -2522,6 +2784,246 @@ f.channel().closeFuture().sync();</code></pre>
                 <span class="qa-badge qa-badge-a">A</span>
                 <p>这是 JDK NIO 的已知 bug（JDK-6670302，与 Linux epoll 在连接重置等场景下的行为有关）：Selector.select() 在没有就绪事件时也会立即返回 0，导致 while(true) 循环空转 CPU 100%。Netty 的解决方案：<strong>计数检测 + Selector 重建</strong>。统计一个时间窗口内 select 返回 0 且耗时极短的次数，超过阈值（默认 512 次）就判定触发了 bug，此时新建一个 Selector，将所有 Channel 的注册迁移到新 Selector 上，关闭旧的（对应 <code>NioEventLoop.rebuildSelector()</code>）。</p>
             </div>
+        </div>
+    </div>
+
+    <!-- 4.5 Rate Limiting Algorithms -->
+    <div class="subsection" id="rate-limiting">
+        <h3>4.5 限流算法</h3>
+
+        <p>限流是高并发系统的最后一道防线。当流量超过系统承载能力时，必须主动拒绝多余请求以保护核心服务。限流算法的选择直接决定了系统在流量洪峰下的表现。</p>
+
+        <h4>固定窗口计数器</h4>
+        <p>最简单的限流算法：将时间划分为固定窗口（如每秒），窗口内计数，超过阈值则拒绝。</p>
+
+        <div class="code-block">
+            <div class="code-header">
+                <div class="code-dots"><span></span><span></span><span></span></div>
+                <span>固定窗口限流实现</span>
+            </div>
+            <pre><code><span class="kw">public class</span> <span class="type">FixedWindowRateLimiter</span> {
+    <span class="kw">private final int</span> maxRequests;       <span class="cmt">// 窗口内最大请求数</span>
+    <span class="kw">private final long</span> windowSizeMs;     <span class="cmt">// 窗口大小(毫秒)</span>
+    <span class="kw">private</span> <span class="type">AtomicInteger</span> counter = <span class="kw">new</span> <span class="type">AtomicInteger</span>(<span class="num">0</span>);
+    <span class="kw">private volatile long</span> windowStart = System.currentTimeMillis();
+
+    <span class="kw">public synchronized boolean</span> <span class="fn">tryAcquire</span>() {
+        <span class="type">long</span> now = System.currentTimeMillis();
+        <span class="kw">if</span> (now - windowStart &gt;= windowSizeMs) {
+            counter.set(<span class="num">0</span>);       <span class="cmt">// 新窗口，重置计数</span>
+            windowStart = now;
+        }
+        <span class="kw">return</span> counter.incrementAndGet() &lt;= maxRequests;
+    }
+}
+
+<span class="cmt">// === 临界点问题 ===</span>
+<span class="cmt">// 窗口 [0s, 1s] 限制100次，窗口 [1s, 2s] 限制100次</span>
+<span class="cmt">// 但在 [0.5s, 1.5s] 这1秒内可能通过200次请求！</span>
+<span class="cmt">// 前一窗口末尾100次 + 后一窗口开头100次 = 2倍流量穿透</span></code></pre>
+        </div>
+
+        <h4>滑动窗口计数器</h4>
+        <p>将窗口细分为多个小格子，窗口随时间滑动。本质是固定窗口的精细化版本，格子越多越平滑，但内存开销也越大。</p>
+
+        <div class="code-block">
+            <div class="code-header">
+                <div class="code-dots"><span></span><span></span><span></span></div>
+                <span>滑动窗口原理</span>
+            </div>
+            <pre><code><span class="cmt">// 将1秒窗口划分为10个100ms的格子</span>
+<span class="cmt">// 每次判断时，统计最近10个格子的请求总数</span>
+<span class="cmt">//</span>
+<span class="cmt">// 时间轴：</span>
+<span class="cmt">// |--格1--|--格2--|--格3--|--格4--|--格5--|--格6--|--格7--|--格8--|--格9--|--格10--|</span>
+<span class="cmt">//                        ← 当前窗口 (最近1秒) →</span>
+<span class="cmt">// 窗口滑动时丢弃最旧的格子，加入最新的格子</span>
+
+<span class="cmt">// TCP 滑动窗口、Sentinel 的滑动窗口限流都基于此思想</span>
+<span class="cmt">// Sentinel 使用 LeapArray 数据结构，环形数组实现高效滑动窗口</span>
+
+<span class="cmt">// 优点：比固定窗口更平滑，避免临界点问题</span>
+<span class="cmt">// 缺点：格子越细内存越大，实现复杂度高于固定窗口</span></code></pre>
+        </div>
+
+        <h4>漏桶算法（Leaky Bucket）</h4>
+        <p>请求像水一样流入桶中，桶以<strong>固定速率</strong>漏出处理。桶满则溢出（拒绝）。</p>
+
+        <div class="code-block">
+            <div class="code-header">
+                <div class="code-dots"><span></span><span></span><span></span></div>
+                <span>漏桶算法实现</span>
+            </div>
+            <pre><code><span class="kw">public class</span> <span class="type">LeakyBucketRateLimiter</span> {
+    <span class="kw">private final int</span> capacity;       <span class="cmt">// 桶容量</span>
+    <span class="kw">private final double</span> leakRate;    <span class="cmt">// 漏出速率 (请求/秒)</span>
+    <span class="kw">private double</span> water = <span class="num">0</span>;         <span class="cmt">// 当前水量</span>
+    <span class="kw">private long</span> lastTime = System.currentTimeMillis();
+
+    <span class="kw">public synchronized boolean</span> <span class="fn">tryAcquire</span>() {
+        <span class="type">long</span> now = System.currentTimeMillis();
+        <span class="type">double</span> elapsed = (now - lastTime) / <span class="num">1000.0</span>;
+        lastTime = now;
+
+        <span class="cmt">// 计算这段时间漏出的水量</span>
+        water = Math.max(<span class="num">0</span>, water - elapsed * leakRate);
+
+        <span class="kw">if</span> (water &lt; capacity) {
+            water += <span class="num">1</span>;  <span class="cmt">// 放入一滴水</span>
+            <span class="kw">return true</span>;
+        }
+        <span class="kw">return false</span>;  <span class="cmt">// 桶满，溢出拒绝</span>
+    }
+}
+
+<span class="cmt">// 特点：输出速率恒定，无论输入多突发</span>
+<span class="cmt">// 优点：绝对平滑，适合需要严格匀速处理的场景（如消息队列消费）</span>
+<span class="cmt">// 缺点：无法应对突发流量（即使系统有余力也不能加速处理）</span></code></pre>
+        </div>
+
+        <h4>令牌桶算法（Token Bucket）</h4>
+        <p>系统以固定速率向桶中放入令牌，请求到来时需要从桶中获取令牌。桶中有令牌则通过，无令牌则拒绝。桶有容量上限，允许一定程度的突发。</p>
+
+        <div class="diagram">
+            <div class="diagram-title">令牌桶算法原理</div>
+            <svg width="680" height="260" viewBox="0 0 680 260">
+                <!-- Token generator -->
+                <rect x="20" y="30" width="130" height="60" rx="8" fill="rgba(16,185,129,0.1)" stroke="#10b981" stroke-width="2"/>
+                <text x="85" y="55" text-anchor="middle" fill="#10b981" font-size="11" font-weight="bold" font-family="Noto Sans SC">令牌生成器</text>
+                <text x="85" y="75" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="Noto Sans SC">固定速率 r 个/秒</text>
+
+                <!-- Arrow to bucket -->
+                <line x1="150" y1="60" x2="200" y2="60" stroke="#10b981" stroke-width="2" marker-end="url(#rl-g)"/>
+                <text x="175" y="52" fill="#10b981" font-size="8">放入</text>
+
+                <!-- Token Bucket -->
+                <rect x="200" y="20" width="160" height="100" rx="10" fill="rgba(245,158,11,0.08)" stroke="#f59e0b" stroke-width="2"/>
+                <text x="280" y="42" text-anchor="middle" fill="#f59e0b" font-size="12" font-weight="bold" font-family="Noto Sans SC">令牌桶</text>
+                <text x="280" y="60" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="Noto Sans SC">容量上限: B (burst)</text>
+                <!-- Tokens -->
+                <circle cx="220" cy="85" r="8" fill="rgba(245,158,11,0.4)" stroke="#f59e0b" stroke-width="1"/>
+                <circle cx="240" cy="85" r="8" fill="rgba(245,158,11,0.4)" stroke="#f59e0b" stroke-width="1"/>
+                <circle cx="260" cy="85" r="8" fill="rgba(245,158,11,0.4)" stroke="#f59e0b" stroke-width="1"/>
+                <circle cx="280" cy="85" r="8" fill="rgba(245,158,11,0.4)" stroke="#f59e0b" stroke-width="1"/>
+                <circle cx="300" cy="85" r="8" fill="rgba(245,158,11,0.3)" stroke="#f59e0b" stroke-width="1"/>
+                <circle cx="320" cy="85" r="8" fill="rgba(245,158,11,0.2)" stroke="#f59e0b" stroke-width="1" stroke-dasharray="2"/>
+                <circle cx="340" cy="85" r="8" fill="rgba(245,158,11,0.1)" stroke="#f59e0b" stroke-width="1" stroke-dasharray="2"/>
+                <text x="280" y="108" text-anchor="middle" fill="#64748b" font-size="8" font-family="Noto Sans SC">当前令牌数</text>
+
+                <!-- Request flow -->
+                <rect x="430" y="30" width="100" height="50" rx="8" fill="rgba(59,130,246,0.1)" stroke="#3b82f6" stroke-width="1.5"/>
+                <text x="480" y="52" text-anchor="middle" fill="#3b82f6" font-size="11" font-weight="bold" font-family="Noto Sans SC">请求到达</text>
+                <text x="480" y="68" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="Noto Sans SC">获取令牌</text>
+
+                <line x1="430" y1="55" x2="360" y2="55" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#rl-b)"/>
+
+                <!-- Success path -->
+                <line x1="530" y1="55" x2="580" y2="55" stroke="#10b981" stroke-width="2" marker-end="url(#rl-g)"/>
+                <rect x="580" y="35" width="80" height="40" rx="6" fill="rgba(16,185,129,0.1)" stroke="#10b981" stroke-width="1.5"/>
+                <text x="620" y="59" text-anchor="middle" fill="#10b981" font-size="10" font-weight="bold" font-family="Noto Sans SC">通过</text>
+
+                <!-- Reject path -->
+                <line x1="480" y1="80" x2="480" y2="110" stroke="#ef4444" stroke-width="1.5" marker-end="url(#rl-r)"/>
+                <rect x="440" y="110" width="80" height="35" rx="6" fill="rgba(239,68,68,0.1)" stroke="#ef4444" stroke-width="1.5"/>
+                <text x="480" y="131" text-anchor="middle" fill="#ef4444" font-size="10" font-weight="bold" font-family="Noto Sans SC">拒绝/降级</text>
+                <text x="480" y="140" text-anchor="middle" fill="#64748b" font-size="8">(无令牌)</text>
+
+                <!-- Key insight box -->
+                <rect x="20" y="150" width="640" height="100" rx="8" fill="rgba(30,41,59,0.5)" stroke="#1e293b" stroke-width="1"/>
+                <text x="40" y="175" fill="#e2e8f0" font-size="11" font-weight="bold" font-family="Noto Sans SC">令牌桶核心特性：</text>
+                <text x="40" y="195" fill="#10b981" font-size="10" font-family="Noto Sans SC">1. 匀速生产：令牌以固定速率 r 放入桶中，桶满则丢弃多余令牌</text>
+                <text x="40" y="213" fill="#f59e0b" font-size="10" font-family="Noto Sans SC">2. 允许突发：桶中积累的令牌可一次性消费，应对短时突发流量 (burst = B)</text>
+                <text x="40" y="231" fill="#3b82f6" font-size="10" font-family="Noto Sans SC">3. 长期均值：长期来看，通过速率不超过 r，但短期可达 B (桶容量)</text>
+                <text x="40" y="245" fill="#94a3b8" font-size="10" font-family="Noto Sans SC">代表实现：Guava RateLimiter (SmoothBursty / SmoothWarmingUp)</text>
+
+                <defs>
+                    <marker id="rl-g" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#10b981"/></marker>
+                    <marker id="rl-b" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/></marker>
+                    <marker id="rl-r" markerWidth="8" markerHeight="6" refX="3" refY="0" orient="auto"><polygon points="0 0, 6 0, 3 8" fill="#ef4444"/></marker>
+                </defs>
+            </svg>
+        </div>
+
+        <div class="code-block">
+            <div class="code-header">
+                <div class="code-dots"><span></span><span></span><span></span></div>
+                <span>Guava RateLimiter 使用与原理</span>
+            </div>
+            <pre><code><span class="cmt">// === Guava RateLimiter: 工业级令牌桶实现 ===</span>
+<span class="type">RateLimiter</span> limiter = RateLimiter.create(<span class="num">100</span>);  <span class="cmt">// 每秒100个令牌</span>
+
+<span class="cmt">// 阻塞等待获取令牌</span>
+limiter.acquire();  <span class="cmt">// 获取1个令牌，不够则等待</span>
+limiter.acquire(<span class="num">5</span>); <span class="cmt">// 获取5个令牌</span>
+
+<span class="cmt">// 非阻塞尝试</span>
+<span class="kw">if</span> (limiter.tryAcquire()) {
+    <span class="cmt">// 获取成功</span>
+} <span class="kw">else</span> {
+    <span class="cmt">// 限流，返回 429 或降级</span>
+}
+
+<span class="cmt">// === 两种模式 ===</span>
+<span class="cmt">// 1. SmoothBursty: 允许突发，预存令牌可以一次性消费</span>
+RateLimiter.create(<span class="num">100</span>);  <span class="cmt">// 默认 SmoothBursty</span>
+
+<span class="cmt">// 2. SmoothWarmingUp: 冷启动预热，初始速率低逐渐升高</span>
+RateLimiter.create(<span class="num">100</span>, <span class="num">3</span>, TimeUnit.SECONDS);  <span class="cmt">// 3秒预热期</span>
+<span class="cmt">// 适用场景：服务刚启动，缓存未就绪，需要逐步放量</span>
+
+<span class="cmt">// === Guava RateLimiter 的精妙设计 ===</span>
+<span class="cmt">// 1. 不用定时器填充令牌（惰性计算：获取时才根据时间差算出应有的令牌数）</span>
+<span class="cmt">// 2. "预支"机制：当前请求可以"透支"未来令牌，下一个请求承担等待</span>
+<span class="cmt">//    这使得第一个请求零延迟通过，平滑了单个请求的延迟体验</span>
+<span class="cmt">// 3. storedPermits + nextFreeTicketMicros 两个字段即可表示全部状态</span></code></pre>
+        </div>
+
+        <h4>四种算法对比</h4>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr><th>算法</th><th>原理</th><th>突发流量</th><th>平滑度</th><th>实现复杂度</th><th>典型应用</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><strong>固定窗口</strong></td><td>时间窗口内计数</td><td>临界点可2倍穿透</td><td>低</td><td>低</td><td>简单 API 限流</td></tr>
+                    <tr><td><strong>滑动窗口</strong></td><td>细粒度滑动统计</td><td>较好控制</td><td>中</td><td>中</td><td>Sentinel、TCP</td></tr>
+                    <tr><td><strong>漏桶</strong></td><td>固定速率处理</td><td>无法应对突发</td><td>最高(绝对匀速)</td><td>低</td><td>流量整形、MQ 消费</td></tr>
+                    <tr><td><strong>令牌桶</strong></td><td>匀速生产令牌</td><td>允许突发(桶中积累)</td><td>高(长期匀速)</td><td>中</td><td>Guava、Nginx、网关</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="callout callout-key">
+            <div class="callout-title">面试选择题：漏桶 vs 令牌桶</div>
+            <p><strong>漏桶</strong>强制匀速输出，适合对下游保护严格的场景（如数据库写入限速）。<strong>令牌桶</strong>允许一定突发，适合面向用户的 API 限流（短时高峰可以快速响应，长期速率受控）。<strong>面试最佳答案</strong>：大多数场景用令牌桶（Guava RateLimiter），因为它在保证长期速率的同时能应对合理的流量突发，用户体验更好。</p>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>分布式限流怎么做？单机限流的局限是什么？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p><strong>单机限流局限</strong>：多实例部署时，每台机器独立限流，总流量 = 单机阈值 × 实例数，无法精确控制全局 QPS。<strong>分布式限流方案</strong>：1) <strong>Redis + Lua</strong>：用 Redis 原子操作实现令牌桶/滑动窗口（Lua 脚本保证原子性），所有实例共享同一个计数器；2) <strong>Sentinel 集群限流</strong>：选举 Token Server 统一分配令牌；3) <strong>网关层限流</strong>：在 Nginx/Kong/Spring Cloud Gateway 层面统一限流，对后端透明。Redis 方案最常用：<code>EVAL lua_script key limit window</code>。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>Guava RateLimiter 为什么不用定时器定期放令牌？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>定时器方案有两个问题：1) 精度有限（线程调度延迟）；2) 空闲时浪费资源（没请求也在填充）。Guava 采用<strong>惰性计算</strong>：记录上次获取令牌的时间 <code>nextFreeTicketMicros</code>，当新请求到来时根据时间差一次性计算出应该累积的令牌数 <code>storedPermits = min(maxPermits, storedPermits + (now - last) * rate)</code>。这样既精确又无后台线程开销，是"用时间换空间"的典型设计。</p>
+            </div>
+        </div>
+
+        <div class="callout callout-insight">
+            <div class="callout-title">Doug Lea 视角</div>
+            <p>限流本质上是一个<strong>资源获取的同步问题</strong>——它和 Semaphore 的设计思想一脉相承。Semaphore 控制的是"同时进入临界区的线程数"，令牌桶控制的是"单位时间内通过的请求数"。在虚拟线程时代，限流变得更重要：百万虚拟线程可以轻松发起百万并发请求，如果不限流，下游（数据库、第三方 API）会瞬间被打爆。我建议用 <code>Semaphore</code> 做并发数控制，用令牌桶做速率控制，两者配合使用。</p>
         </div>
     </div>
 

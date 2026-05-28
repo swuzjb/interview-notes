@@ -1,0 +1,1762 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>分布式系统 · 面试深度指南</title>
+<link rel="stylesheet" href="./shared/style.css">
+<style>
+  .callout.levchin {
+    border-left-color: var(--accent-secondary);
+    background: rgba(59, 130, 246, 0.05);
+  }
+  .callout.levchin::before {
+    content: 'MAX LEVCHIN';
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--accent-secondary);
+    margin-bottom: 0.3rem;
+    letter-spacing: 0.5px;
+  }
+</style>
+</head>
+<body>
+<div class="reading-progress"></div>
+<button class="theme-toggle" aria-label="切换主题">&#9788;</button>
+<button class="mobile-menu-btn" aria-label="菜单">&#9776;</button>
+<div class="sidebar-overlay"></div>
+
+<div class="page-wrapper">
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">分布式<span class="accent">系统</span></div>
+    <div class="sidebar-subtitle">面试深度指南 · Max Levchin 视角</div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-group">
+      <a href="#chapter1" class="nav-group-title">CAP定理 &amp; BASE理论</a>
+      <div class="nav-items">
+        <a href="#cap-theorem">CAP三选二</a>
+        <a href="#cap-practice">支付系统CAP选择</a>
+        <a href="#base-theory">BASE理论</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#chapter2" class="nav-group-title">分布式事务</a>
+      <div class="nav-items">
+        <a href="#two-phase-commit">2PC两阶段提交</a>
+        <a href="#tcc">TCC模式</a>
+        <a href="#saga">SAGA模式</a>
+        <a href="#local-msg-table">本地消息表</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#chapter3" class="nav-group-title">幂等设计</a>
+      <div class="nav-items">
+        <a href="#idempotent-schemes">五种方案对比</a>
+        <a href="#idempotent-payment">支付幂等体系</a>
+        <a href="#idempotent-code">代码实现</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#chapter4" class="nav-group-title">一致性哈希</a>
+      <div class="nav-items">
+        <a href="#hash-ring">哈希环原理</a>
+        <a href="#virtual-nodes">虚拟节点</a>
+        <a href="#data-sharding">数据分片策略</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#chapter5" class="nav-group-title">高频 Q&amp;A</a>
+      <div class="nav-items">
+        <a href="#chapter5">跨行转账设计</a>
+        <a href="#chapter5">2PC vs TCC</a>
+        <a href="#chapter5">全局唯一ID</a>
+        <a href="#chapter5">选型决策树</a>
+      </div>
+    </div>
+  </nav>
+</aside>
+
+<main class="main-content">
+<!-- ============================== HERO ============================== -->
+<div class="page-hero">
+  <h1>分布式系统 · 面试深度指南</h1>
+  <p class="subtitle">以 PayPal 联合创始人 Max Levchin 的支付系统视角，拆解 CAP/BASE、分布式事务、幂等设计、一致性哈希核心考点</p>
+  <p class="author">覆盖 2PC / TCC / SAGA / 本地消息表 · 幂等五层防线 · 一致性哈希与虚拟节点</p>
+</div>
+
+<!-- ============================== CHAPTER 1 ============================== -->
+<section class="chapter" id="chapter1">
+<div class="chapter-header">
+  <span class="chapter-number">Chapter 01</span>
+  <h2>CAP定理 &amp; BASE理论</h2>
+</div>
+
+<div class="chapter-intro">
+  <strong>面试核心：</strong>分布式系统的基石理论。CAP 定理告诉我们在分布式环境下不可能同时满足一致性(C)、可用性(A)、分区容错性(P)三者，而 BASE 理论则是对 CAP 中 AP 方向的延伸实践。理解这些理论是回答所有分布式问题的前提。
+</div>
+
+<h3 id="cap-theorem">CAP 三选二的本质</h3>
+
+<p><strong>CAP 定理 (Brewer's Theorem)</strong> 指出分布式系统不可能同时满足以下三个保证：</p>
+
+<ul>
+  <li><strong>Consistency (一致性)</strong>：所有节点在同一时刻看到相同的数据</li>
+  <li><strong>Availability (可用性)</strong>：每个请求都能在合理时间内收到非错误响应</li>
+  <li><strong>Partition Tolerance (分区容错)</strong>：网络分区发生时系统仍能继续运行</li>
+</ul>
+
+<div class="callout warn">
+  <p><strong>关键认知：P 不是可选项！</strong>在分布式系统中，网络分区是必然会发生的（物理定律决定），因此 P 是必须容忍的。实际选择是在 <strong>CP</strong> 和 <strong>AP</strong> 之间权衡。</p>
+</div>
+
+<div class="diagram">
+  <div class="diagram-title">CAP 定理三角</div>
+  <svg width="400" height="320" viewBox="0 0 400 320" xmlns="http://www.w3.org/2000/svg">
+    <!-- Triangle -->
+    <polygon points="200,30 50,280 350,280" fill="none" stroke="currentColor" stroke-width="2" opacity="0.3"/>
+    <!-- Vertices -->
+    <circle cx="200" cy="30" r="28" fill="rgba(59,130,246,0.15)" stroke="#3b82f6" stroke-width="2"/>
+    <text x="200" y="35" text-anchor="middle" font-size="14" font-weight="700" fill="#3b82f6">C</text>
+    <circle cx="50" cy="280" r="28" fill="rgba(52,211,153,0.15)" stroke="#34d399" stroke-width="2"/>
+    <text x="50" y="285" text-anchor="middle" font-size="14" font-weight="700" fill="#34d399">A</text>
+    <circle cx="350" cy="280" r="28" fill="rgba(251,146,60,0.15)" stroke="#fb923c" stroke-width="2"/>
+    <text x="350" y="285" text-anchor="middle" font-size="14" font-weight="700" fill="#fb923c">P</text>
+    <!-- Labels -->
+    <text x="200" y="5" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.7">一致性 Consistency</text>
+    <text x="50" y="315" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.7">可用性 Availability</text>
+    <text x="350" y="315" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.7">分区容错 Partition Tolerance</text>
+    <!-- Edge labels -->
+    <text x="110" y="145" text-anchor="middle" font-size="11" fill="#a78bfa" font-weight="600">CP</text>
+    <text x="105" y="162" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.5">ZooKeeper/etcd</text>
+    <text x="290" y="145" text-anchor="middle" font-size="11" fill="#a78bfa" font-weight="600">AP</text>
+    <text x="290" y="162" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.5">Eureka/Cassandra</text>
+    <text x="200" y="295" text-anchor="middle" font-size="11" fill="#a78bfa" font-weight="600">CA</text>
+    <text x="200" y="310" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.5">单机数据库(伪分布式)</text>
+  </svg>
+  <div class="diagram-caption">网络分区必然发生，实际是 CP vs AP 的选择</div>
+</div>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th>模型</th><th>选择</th><th>牺牲</th><th>典型系统</th><th>适用场景</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>CP</strong></td><td>一致性 + 分区容错</td><td>可用性</td><td>ZooKeeper, etcd, HBase</td><td>分布式锁、配置中心、金融扣款</td></tr>
+      <tr><td><strong>AP</strong></td><td>可用性 + 分区容错</td><td>一致性</td><td>Eureka, Cassandra, DynamoDB</td><td>服务注册、DNS、CDN</td></tr>
+      <tr><td><strong>CA</strong></td><td>一致性 + 可用性</td><td>分区容错</td><td>单机 MySQL, PostgreSQL</td><td>不存在真正的分布式 CA 系统</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3 id="cap-practice">支付系统的 CAP 选择实践</h3>
+
+<div class="callout levchin">
+  <p><strong>在 PayPal 早期，我们发现没有任何系统是纯粹的 CP 或 AP。一个支付系统内部，不同环节需要不同的一致性级别。扣款操作必须强一致，但余额展示可以有短暂延迟——关键是让用户感知不到这种差异。</strong></p>
+</div>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th>支付环节</th><th>一致性要求</th><th>CAP选择</th><th>实现方案</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>扣款/转账</strong></td><td>强一致</td><td>CP</td><td>同步写入 + Raft 共识</td></tr>
+      <tr><td><strong>余额查询</strong></td><td>最终一致(秒级)</td><td>AP</td><td>读从库 + 缓存兜底</td></tr>
+      <tr><td><strong>交易通知</strong></td><td>最终一致(分钟级)</td><td>AP</td><td>消息队列异步推送</td></tr>
+      <tr><td><strong>账单记录</strong></td><td>最终一致(天级)</td><td>AP</td><td>T+1 对账修复</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="callout tip">
+  <p><strong>面试话术：</strong>"CAP 不是系统级的一刀切选择，而是操作级的精细划分。同一个支付系统内，核心扣款链路用 CP 保证资金安全，查询展示用 AP 保证用户体验，通知推送用最终一致性保证系统吞吐量。"</p>
+</div>
+
+<h3 id="base-theory">BASE 理论</h3>
+
+<p>BASE 是对 CAP 中 AP 方向的延伸，是大规模互联网系统的实践指导：</p>
+
+<ul>
+  <li><strong>BA (Basically Available - 基本可用)</strong>：系统在出现不可预知故障时，允许损失部分可用性（如响应时间增加、降级服务）</li>
+  <li><strong>S (Soft State - 软状态)</strong>：允许系统中的数据存在中间状态，即允许系统不同节点的数据副本之间存在暂时不一致</li>
+  <li><strong>E (Eventually Consistent - 最终一致性)</strong>：经过一段时间后，所有数据副本最终能达到一致状态</li>
+</ul>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    BASE vs ACID 对比
+  </div>
+  <pre><code><span class="cmt">// ACID (传统数据库)</span>
+Atomicity    → 全部成功或全部失败
+Consistency  → 事务前后数据满足约束
+Isolation    → 事务间互不影响
+Durability   → 提交后永久保存
+
+<span class="cmt">// BASE (分布式系统)</span>
+Basically Available    → 允许部分降级，但基本可用
+Soft State             → 允许中间态存在
+Eventually Consistent  → 最终达到一致（不保证实时）
+
+<span class="cmt">// 本质区别</span>
+ACID: 悲观策略，宁可牺牲性能也要保证一致性
+BASE: 乐观策略，优先保证可用性，异步修复一致性</code></pre>
+</div>
+
+<div class="callout levchin">
+  <p><strong>BASE 不是 ACID 的对立面，而是补充。在 PayPal 的订单系统中，我们核心账务用 ACID，但订单状态流转用 BASE。关键问题不是"选 ACID 还是 BASE"，而是"哪些数据必须 ACID，哪些可以 BASE"。</strong></p>
+</div>
+
+</section>
+
+<!-- ============================== CHAPTER 2 ============================== -->
+<section class="chapter" id="chapter2">
+<div class="chapter-header">
+  <span class="chapter-number">Chapter 02</span>
+  <h2>分布式事务（核心高频）</h2>
+</div>
+
+<div class="chapter-intro">
+  <strong>面试地位：</strong>分布式事务是面试最高频的考点之一。需要掌握 2PC、TCC、SAGA、本地消息表四种方案的原理、优缺点、适用场景，并能结合业务场景深入展开。
+</div>
+
+<!-- ===== 2PC ===== -->
+<h3 id="two-phase-commit">2PC (Two-Phase Commit) 两阶段提交</h3>
+
+<h4>核心流程</h4>
+<p>2PC 由一个<strong>协调者 (Coordinator)</strong> 和多个<strong>参与者 (Participant)</strong> 组成：</p>
+
+<div class="diagram">
+  <div class="diagram-title">2PC 两阶段提交流程</div>
+  <svg width="680" height="400" viewBox="0 0 680 400" xmlns="http://www.w3.org/2000/svg">
+    <!-- Phase divider -->
+    <line x1="0" y1="200" x2="680" y2="200" stroke="currentColor" stroke-width="1" stroke-dasharray="4,4" opacity="0.3"/>
+    <text x="10" y="30" font-size="12" font-weight="700" fill="#f59e0b">Phase 1: Prepare (投票阶段)</text>
+    <text x="10" y="220" font-size="12" font-weight="700" fill="#34d399">Phase 2: Commit (提交阶段)</text>
+    
+    <!-- Coordinator -->
+    <rect x="280" y="50" width="120" height="40" rx="6" fill="rgba(245,158,11,0.15)" stroke="#f59e0b" stroke-width="2"/>
+    <text x="340" y="75" text-anchor="middle" font-size="12" font-weight="600" fill="#f59e0b">Coordinator</text>
+    
+    <!-- Participants Phase 1 -->
+    <rect x="80" y="130" width="100" height="36" rx="6" fill="rgba(59,130,246,0.12)" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="130" y="152" text-anchor="middle" font-size="11" fill="#3b82f6">Participant A</text>
+    <rect x="290" y="130" width="100" height="36" rx="6" fill="rgba(59,130,246,0.12)" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="340" y="152" text-anchor="middle" font-size="11" fill="#3b82f6">Participant B</text>
+    <rect x="500" y="130" width="100" height="36" rx="6" fill="rgba(59,130,246,0.12)" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="550" y="152" text-anchor="middle" font-size="11" fill="#3b82f6">Participant C</text>
+    
+    <!-- Prepare arrows -->
+    <line x1="310" y1="90" x2="150" y2="130" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-gold)"/>
+    <line x1="340" y1="90" x2="340" y2="130" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-gold)"/>
+    <line x1="370" y1="90" x2="530" y2="130" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-gold)"/>
+    <text x="210" y="105" font-size="9" fill="currentColor" opacity="0.6">Prepare</text>
+    <text x="440" y="105" font-size="9" fill="currentColor" opacity="0.6">Prepare</text>
+    
+    <!-- Vote arrows back -->
+    <line x1="150" y1="166" x2="310" y2="195" stroke="#34d399" stroke-width="1" stroke-dasharray="3,3"/>
+    <line x1="340" y1="166" x2="340" y2="195" stroke="#34d399" stroke-width="1" stroke-dasharray="3,3"/>
+    <line x1="530" y1="166" x2="370" y2="195" stroke="#34d399" stroke-width="1" stroke-dasharray="3,3"/>
+    <text x="210" y="187" font-size="9" fill="#34d399">Yes</text>
+    <text x="450" y="187" font-size="9" fill="#34d399">Yes</text>
+    
+    <!-- Phase 2 Coordinator -->
+    <rect x="280" y="240" width="120" height="40" rx="6" fill="rgba(52,211,153,0.15)" stroke="#34d399" stroke-width="2"/>
+    <text x="340" y="265" text-anchor="middle" font-size="12" font-weight="600" fill="#34d399">Coordinator</text>
+    
+    <!-- Participants Phase 2 -->
+    <rect x="80" y="320" width="100" height="36" rx="6" fill="rgba(52,211,153,0.12)" stroke="#34d399" stroke-width="1.5"/>
+    <text x="130" y="342" text-anchor="middle" font-size="11" fill="#34d399">Commit &#10003;</text>
+    <rect x="290" y="320" width="100" height="36" rx="6" fill="rgba(52,211,153,0.12)" stroke="#34d399" stroke-width="1.5"/>
+    <text x="340" y="342" text-anchor="middle" font-size="11" fill="#34d399">Commit &#10003;</text>
+    <rect x="500" y="320" width="100" height="36" rx="6" fill="rgba(52,211,153,0.12)" stroke="#34d399" stroke-width="1.5"/>
+    <text x="550" y="342" text-anchor="middle" font-size="11" fill="#34d399">Commit &#10003;</text>
+    
+    <!-- Commit arrows -->
+    <line x1="310" y1="280" x2="150" y2="320" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+    <line x1="340" y1="280" x2="340" y2="320" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+    <line x1="370" y1="280" x2="530" y2="320" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+    <text x="210" y="300" font-size="9" fill="currentColor" opacity="0.6">Commit</text>
+    <text x="440" y="300" font-size="9" fill="currentColor" opacity="0.6">Commit</text>
+    
+    <!-- Arrow markers -->
+    <defs>
+      <marker id="arrow-gold" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#f59e0b"/>
+      </marker>
+      <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#34d399"/>
+      </marker>
+    </defs>
+  </svg>
+  <div class="diagram-caption">协调者收到所有参与者 YES 投票后发送 Commit；任一参与者投 NO 则发 Rollback</div>
+</div>
+
+<h4>2PC 的三大问题</h4>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th>问题</th><th>描述</th><th>后果</th><th>改进方案</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>同步阻塞</strong></td>
+        <td>参与者在 Prepare 后处于阻塞状态，持有锁资源等待协调者指令</td>
+        <td>资源长期锁定，系统吞吐下降</td>
+        <td>引入超时机制，3PC 增加 PreCommit 阶段</td>
+      </tr>
+      <tr>
+        <td><strong>单点故障</strong></td>
+        <td>协调者宕机后参与者无法得知事务最终状态</td>
+        <td>参与者永远阻塞，需要人工介入</td>
+        <td>协调者主备切换，写 WAL 日志</td>
+      </tr>
+      <tr>
+        <td><strong>数据不一致</strong></td>
+        <td>Phase 2 中协调者发送 Commit 给部分参与者后宕机</td>
+        <td>部分节点提交、部分未提交，脑裂</td>
+        <td>引入互询机制，或使用 Paxos/Raft 代替</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="callout tip">
+  <p><strong>面试话术：</strong>"2PC 理论简单但生产环境很少直接使用，因为它的同步阻塞和单点问题在高并发场景下是致命的。实际中更多用 TCC 或 SAGA 这类柔性事务方案——牺牲强一致性换取性能和可用性。"</p>
+</div>
+
+<!-- ===== TCC ===== -->
+<h3 id="tcc">TCC (Try-Confirm-Cancel) 模式</h3>
+
+<h4>核心思想</h4>
+<p>TCC 将事务分为三个阶段，本质是<strong>应用层的两阶段提交</strong>——把数据库层面的锁和准备操作上升到业务层面：</p>
+
+<div class="flow-chart">
+  <div class="flow-node" style="border-color: #3b82f6;">Try<br><small>预留资源</small></div>
+  <span class="flow-arrow">&#8594;</span>
+  <div class="flow-node" style="border-color: #34d399;">Confirm<br><small>确认提交</small></div>
+  <span class="flow-arrow">或</span>
+  <div class="flow-node" style="border-color: #f87171;">Cancel<br><small>补偿回滚</small></div>
+</div>
+
+<div class="diagram">
+  <div class="diagram-title">TCC 转账场景流程</div>
+  <svg width="620" height="350" viewBox="0 0 620 350" xmlns="http://www.w3.org/2000/svg">
+    <!-- Timeline -->
+    <line x1="60" y1="60" x2="60" y2="330" stroke="currentColor" stroke-width="1" opacity="0.2"/>
+    <line x1="250" y1="60" x2="250" y2="330" stroke="currentColor" stroke-width="1" opacity="0.2"/>
+    <line x1="440" y1="60" x2="440" y2="330" stroke="currentColor" stroke-width="1" opacity="0.2"/>
+    
+    <!-- Headers -->
+    <rect x="20" y="25" width="80" height="28" rx="4" fill="rgba(245,158,11,0.15)" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="60" y="44" text-anchor="middle" font-size="11" font-weight="600" fill="#f59e0b">TM</text>
+    <rect x="200" y="25" width="100" height="28" rx="4" fill="rgba(59,130,246,0.12)" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="250" y="44" text-anchor="middle" font-size="11" font-weight="600" fill="#3b82f6">账户A (扣款)</text>
+    <rect x="390" y="25" width="100" height="28" rx="4" fill="rgba(52,211,153,0.12)" stroke="#34d399" stroke-width="1.5"/>
+    <text x="440" y="44" text-anchor="middle" font-size="11" font-weight="600" fill="#34d399">账户B (收款)</text>
+    
+    <!-- Try Phase -->
+    <text x="540" y="95" font-size="10" fill="#a78bfa" font-weight="600">Try</text>
+    <line x1="60" y1="90" x2="250" y2="90" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+    <text x="155" y="83" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.7">冻结A余额100元</text>
+    <line x1="250" y1="100" x2="60" y2="100" stroke="#3b82f6" stroke-width="1" stroke-dasharray="3,3"/>
+    <text x="155" y="114" text-anchor="middle" font-size="9" fill="#34d399">OK</text>
+    
+    <line x1="60" y1="130" x2="440" y2="130" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green2)"/>
+    <text x="250" y="123" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.7">预增B待入账100元</text>
+    <line x1="440" y1="140" x2="60" y2="140" stroke="#34d399" stroke-width="1" stroke-dasharray="3,3"/>
+    <text x="250" y="154" text-anchor="middle" font-size="9" fill="#34d399">OK</text>
+    
+    <!-- Confirm Phase -->
+    <text x="540" y="195" font-size="10" fill="#a78bfa" font-weight="600">Confirm</text>
+    <line x1="60" y1="190" x2="250" y2="190" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+    <text x="155" y="183" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.7">扣减冻结金额</text>
+    <line x1="250" y1="200" x2="60" y2="200" stroke="#3b82f6" stroke-width="1" stroke-dasharray="3,3"/>
+    
+    <line x1="60" y1="230" x2="440" y2="230" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green2)"/>
+    <text x="250" y="223" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.7">待入账转为可用余额</text>
+    <line x1="440" y1="240" x2="60" y2="240" stroke="#34d399" stroke-width="1" stroke-dasharray="3,3"/>
+    
+    <!-- Cancel Phase (alternative) -->
+    <rect x="15" y="270" width="590" height="60" rx="6" fill="rgba(248,113,113,0.05)" stroke="#f87171" stroke-width="1" stroke-dasharray="4,4"/>
+    <text x="540" y="295" font-size="10" fill="#f87171" font-weight="600">Cancel</text>
+    <text x="155" y="295" text-anchor="middle" font-size="9" fill="#f87171">解冻A余额100元</text>
+    <text x="350" y="315" text-anchor="middle" font-size="9" fill="#f87171">撤销B待入账100元</text>
+    
+    <defs>
+      <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#3b82f6"/>
+      </marker>
+      <marker id="arrow-green2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#34d399"/>
+      </marker>
+    </defs>
+  </svg>
+  <div class="diagram-caption">Try 阶段预留资源（冻结/预增），Confirm 真正提交，Cancel 回滚预留</div>
+</div>
+
+<h4>TCC 三大异常及解决方案</h4>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th>异常</th><th>产生原因</th><th>现象</th><th>解决方案</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>空回滚</strong></td>
+        <td>Try 未执行（超时/丢包），但 Cancel 被调用</td>
+        <td>Cancel 找不到 Try 的记录</td>
+        <td>Cancel 中判断是否有 Try 记录，无记录则直接返回成功</td>
+      </tr>
+      <tr>
+        <td><strong>悬挂</strong></td>
+        <td>Cancel 先于 Try 到达（网络乱序）</td>
+        <td>Cancel 执行后 Try 又来了，导致资源被锁</td>
+        <td>Try 中检查是否已有 Cancel 记录，已取消则拒绝执行</td>
+      </tr>
+      <tr>
+        <td><strong>幂等</strong></td>
+        <td>网络重试导致 Confirm/Cancel 重复调用</td>
+        <td>重复扣款/重复退款</td>
+        <td>引入事务状态表，执行前检查状态是否已完成</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h4>TCC 转账代码示例</h4>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    TCC 转账 - Try/Confirm/Cancel 实现 (Java)
+  </div>
+  <pre><code><span class="ann">@TccService</span>
+<span class="kw">public class</span> <span class="type">TransferTccService</span> {
+
+    <span class="ann">@Autowired</span>
+    <span class="kw">private</span> <span class="type">AccountMapper</span> accountMapper;
+    <span class="ann">@Autowired</span>
+    <span class="kw">private</span> <span class="type">TccTransactionMapper</span> txMapper;
+
+    <span class="cmt">// ========== Try 阶段：冻结出账方金额，预增入账方金额 ==========</span>
+    <span class="ann">@Transactional</span>
+    <span class="kw">public boolean</span> <span class="fn">tryTransfer</span>(<span class="type">String</span> txId, <span class="type">String</span> fromId, <span class="type">String</span> toId, <span class="type">BigDecimal</span> amount) {
+        <span class="cmt">// 防悬挂：检查是否已有 Cancel 记录</span>
+        <span class="type">TccRecord</span> record = txMapper.selectByTxId(txId);
+        <span class="kw">if</span> (record != <span class="kw">null</span> &amp;&amp; record.getStatus() == <span class="type">TccStatus</span>.CANCELLED) {
+            <span class="kw">return false</span>; <span class="cmt">// 已取消，拒绝执行 Try</span>
+        }
+
+        <span class="cmt">// 冻结出账方金额：available -= amount, frozen += amount</span>
+        <span class="kw">int</span> rows = accountMapper.freezeAmount(fromId, amount);
+        <span class="kw">if</span> (rows == <span class="num">0</span>) {
+            <span class="kw">throw new</span> <span class="type">InsufficientBalanceException</span>(<span class="str">"余额不足"</span>);
+        }
+
+        <span class="cmt">// 预增入账方：pending += amount</span>
+        accountMapper.addPending(toId, amount);
+
+        <span class="cmt">// 记录事务状态为 TRYING</span>
+        txMapper.insert(<span class="kw">new</span> <span class="type">TccRecord</span>(txId, <span class="type">TccStatus</span>.TRYING, amount));
+        <span class="kw">return true</span>;
+    }
+
+    <span class="cmt">// ========== Confirm 阶段：确认扣款和入账 ==========</span>
+    <span class="ann">@Transactional</span>
+    <span class="kw">public boolean</span> <span class="fn">confirmTransfer</span>(<span class="type">String</span> txId, <span class="type">String</span> fromId, <span class="type">String</span> toId, <span class="type">BigDecimal</span> amount) {
+        <span class="cmt">// 幂等检查</span>
+        <span class="type">TccRecord</span> record = txMapper.selectByTxId(txId);
+        <span class="kw">if</span> (record == <span class="kw">null</span> || record.getStatus() == <span class="type">TccStatus</span>.CONFIRMED) {
+            <span class="kw">return true</span>; <span class="cmt">// 已确认，幂等返回</span>
+        }
+
+        <span class="cmt">// 出账方：frozen -= amount（冻结金额真正扣减）</span>
+        accountMapper.deductFrozen(fromId, amount);
+        <span class="cmt">// 入账方：pending -= amount, available += amount</span>
+        accountMapper.confirmPending(toId, amount);
+
+        <span class="cmt">// 更新事务状态</span>
+        txMapper.updateStatus(txId, <span class="type">TccStatus</span>.CONFIRMED);
+        <span class="kw">return true</span>;
+    }
+
+    <span class="cmt">// ========== Cancel 阶段：释放冻结，撤销预增 ==========</span>
+    <span class="ann">@Transactional</span>
+    <span class="kw">public boolean</span> <span class="fn">cancelTransfer</span>(<span class="type">String</span> txId, <span class="type">String</span> fromId, <span class="type">String</span> toId, <span class="type">BigDecimal</span> amount) {
+        <span class="cmt">// 幂等检查</span>
+        <span class="type">TccRecord</span> record = txMapper.selectByTxId(txId);
+        <span class="kw">if</span> (record != <span class="kw">null</span> &amp;&amp; record.getStatus() == <span class="type">TccStatus</span>.CANCELLED) {
+            <span class="kw">return true</span>; <span class="cmt">// 已取消，幂等返回</span>
+        }
+
+        <span class="cmt">// 空回滚判断：Try 未执行</span>
+        <span class="kw">if</span> (record == <span class="kw">null</span>) {
+            <span class="cmt">// 插入 CANCELLED 记录防止后续 Try 悬挂</span>
+            txMapper.insert(<span class="kw">new</span> <span class="type">TccRecord</span>(txId, <span class="type">TccStatus</span>.CANCELLED, amount));
+            <span class="kw">return true</span>;
+        }
+
+        <span class="cmt">// 出账方：frozen -= amount, available += amount（解冻）</span>
+        accountMapper.unfreeze(fromId, amount);
+        <span class="cmt">// 入账方：pending -= amount（撤销预增）</span>
+        accountMapper.cancelPending(toId, amount);
+
+        txMapper.updateStatus(txId, <span class="type">TccStatus</span>.CANCELLED);
+        <span class="kw">return true</span>;
+    }
+}</code></pre>
+</div>
+
+<div class="callout warn">
+  <p><strong>TCC 的核心难点不在流程本身，而在异常处理。</strong>面试中需要明确说出空回滚、悬挂、幂等三个问题及各自的解决方案。许多候选人只说得出 Try-Confirm-Cancel 的流程，却忽略了异常分支。</p>
+</div>
+
+<!-- ===== SAGA ===== -->
+<h3 id="saga">SAGA 模式</h3>
+
+<h4>核心思想</h4>
+<p>SAGA 将长事务拆分为一系列本地事务 T1, T2, ... Tn，每个本地事务 Ti 都有一个对应的补偿事务 Ci。如果 Tk 失败，则依次执行 Ck-1, Ck-2, ... C1 进行反向补偿。</p>
+
+<div class="flow-chart">
+  <div class="flow-node" style="border-color: #34d399;">T1 创建订单</div>
+  <span class="flow-arrow">&#8594;</span>
+  <div class="flow-node" style="border-color: #34d399;">T2 扣减库存</div>
+  <span class="flow-arrow">&#8594;</span>
+  <div class="flow-node" style="border-color: #34d399;">T3 扣款</div>
+  <span class="flow-arrow">&#8594;</span>
+  <div class="flow-node" style="border-color: #34d399;">T4 发货通知</div>
+</div>
+<div class="flow-chart">
+  <div class="flow-node" style="border-color: #f87171;">C1 取消订单</div>
+  <span class="flow-arrow">&#8592;</span>
+  <div class="flow-node" style="border-color: #f87171;">C2 恢复库存</div>
+  <span class="flow-arrow">&#8592;</span>
+  <div class="flow-node" style="border-color: #f87171;">C3 退款</div>
+  <span class="flow-arrow">&#8592;</span>
+  <div class="flow-node" style="border-color: #f87171;">T3 失败!</div>
+</div>
+
+<h4>两种协调方式</h4>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th>维度</th><th>编排式 (Choreography)</th><th>协调式 (Orchestration)</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>通信方式</strong></td><td>事件驱动，服务间通过消息队列通信</td><td>中央协调器统一调度各服务</td></tr>
+      <tr><td><strong>耦合度</strong></td><td>低耦合，各服务独立</td><td>协调器与各服务有依赖</td></tr>
+      <tr><td><strong>复杂度</strong></td><td>链路长时难以追踪</td><td>逻辑集中，易理解和维护</td></tr>
+      <tr><td><strong>适用场景</strong></td><td>3-5步的简单流程</td><td>步骤多、分支复杂的流程</td></tr>
+      <tr><td><strong>代表框架</strong></td><td>Spring Cloud Stream + 事件</td><td>Seata SAGA, Temporal, Cadence</td></tr>
+      <tr><td><strong>可观测性</strong></td><td>差，需要链路追踪</td><td>好，协调器记录完整状态</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h4>SAGA vs TCC 对比</h4>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th>维度</th><th>TCC</th><th>SAGA</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>一致性</strong></td><td>较强（Try 阶段预留资源）</td><td>较弱（执行后才补偿）</td></tr>
+      <tr><td><strong>隔离性</strong></td><td>有（资源冻结=软隔离）</td><td>无（需要额外手段保证）</td></tr>
+      <tr><td><strong>性能</strong></td><td>Try 需等待所有参与者</td><td>各步骤异步执行，吞吐高</td></tr>
+      <tr><td><strong>业务侵入</strong></td><td>高（需实现 Try/Confirm/Cancel 三个接口）</td><td>中（需实现正向 + 补偿接口）</td></tr>
+      <tr><td><strong>适用场景</strong></td><td>短事务、强一致性（转账、支付）</td><td>长事务、最终一致性（下单、旅行预订）</td></tr>
+      <tr><td><strong>资源可见性</strong></td><td>Try 后资源对外不可见</td><td>每步提交后中间状态对外可见</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="callout levchin">
+  <p><strong>在支付系统中，我倾向于核心资金链路用 TCC（金额变动必须有预留），而订单流程用 SAGA（步骤多、耗时长、对隔离性要求没那么高）。不要在所有场景都硬套 TCC，这会让系统复杂度失控。</strong></p>
+</div>
+
+<!-- ===== 本地消息表 ===== -->
+<h3 id="local-msg-table">本地消息表 + 可靠消息</h3>
+
+<h4>核心流程（4步）</h4>
+
+<div class="flow-chart">
+  <div class="flow-node" style="border-color: #f59e0b;">1. 本地事务<br>+ 写消息表</div>
+  <span class="flow-arrow">&#8594;</span>
+  <div class="flow-node" style="border-color: #3b82f6;">2. 定时扫描<br>未发送消息</div>
+  <span class="flow-arrow">&#8594;</span>
+  <div class="flow-node" style="border-color: #a78bfa;">3. 投递MQ<br>标记已发送</div>
+  <span class="flow-arrow">&#8594;</span>
+  <div class="flow-node" style="border-color: #34d399;">4. 消费方处理<br>+ ACK</div>
+</div>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    本地消息表核心实现
+  </div>
+  <pre><code><span class="cmt">// Step 1: 业务操作和消息写入同一个本地事务</span>
+<span class="ann">@Transactional</span>
+<span class="kw">public void</span> <span class="fn">createOrder</span>(<span class="type">Order</span> order) {
+    <span class="cmt">// 1.1 写入业务表</span>
+    orderMapper.insert(order);
+
+    <span class="cmt">// 1.2 写入本地消息表（同一数据库，同一事务）</span>
+    <span class="type">LocalMessage</span> msg = <span class="kw">new</span> <span class="type">LocalMessage</span>();
+    msg.setMsgId(UUID.randomUUID().toString());
+    msg.setTopic(<span class="str">"order-created"</span>);
+    msg.setPayload(JSON.toJSONString(order));
+    msg.setStatus(<span class="str">"PENDING"</span>);  <span class="cmt">// 待发送</span>
+    msg.setRetryCount(<span class="num">0</span>);
+    msg.setCreateTime(LocalDateTime.now());
+    localMessageMapper.insert(msg);
+}
+
+<span class="cmt">// Step 2 &amp; 3: 定时任务扫描并投递</span>
+<span class="ann">@Scheduled</span>(fixedDelay = <span class="num">5000</span>)
+<span class="kw">public void</span> <span class="fn">scanAndSend</span>() {
+    <span class="type">List</span>&lt;<span class="type">LocalMessage</span>&gt; pending = localMessageMapper
+        .selectByStatus(<span class="str">"PENDING"</span>, <span class="num">100</span>); <span class="cmt">// 每次最多100条</span>
+
+    <span class="kw">for</span> (<span class="type">LocalMessage</span> msg : pending) {
+        <span class="kw">try</span> {
+            mqProducer.send(msg.getTopic(), msg.getPayload());
+            localMessageMapper.updateStatus(msg.getMsgId(), <span class="str">"SENT"</span>);
+        } <span class="kw">catch</span> (<span class="type">Exception</span> e) {
+            <span class="cmt">// 重试计数+1，超过阈值则标记 FAILED 人工介入</span>
+            localMessageMapper.incrementRetry(msg.getMsgId());
+            <span class="kw">if</span> (msg.getRetryCount() >= <span class="num">5</span>) {
+                localMessageMapper.updateStatus(msg.getMsgId(), <span class="str">"FAILED"</span>);
+                alertService.notify(<span class="str">"消息投递失败: "</span> + msg.getMsgId());
+            }
+        }
+    }
+}
+
+<span class="cmt">// Step 4: 消费方幂等消费</span>
+<span class="ann">@MQListener</span>(topic = <span class="str">"order-created"</span>)
+<span class="kw">public void</span> <span class="fn">onOrderCreated</span>(<span class="type">String</span> payload) {
+    <span class="type">Order</span> order = JSON.parseObject(payload, <span class="type">Order</span>.class);
+    <span class="cmt">// 幂等处理：通过 orderId 去重</span>
+    <span class="kw">if</span> (inventoryService.isProcessed(order.getOrderId())) {
+        <span class="kw">return</span>;
+    }
+    inventoryService.deductStock(order);
+}</code></pre>
+</div>
+
+<div class="callout tip">
+  <p><strong>面试话术：</strong>"本地消息表的本质是利用<strong>数据库事务</strong>保证'业务操作'和'消息记录'的原子性。然后通过<strong>定时扫描 + 重试</strong>保证消息一定能投递出去。这是最终一致性的经典实现，业务侵入小、理解成本低，适合大多数场景。它本质上就是一个嵌入式的持久化异步任务框架。"</p>
+</div>
+
+<div class="callout levchin">
+  <p><strong>本地消息表是我见过的投入产出比最高的分布式事务方案。在 PayPal 早期我们用类似的思路解决跨系统一致性——用本地事务做「可靠投递」保证，下游做幂等消费。简单、可靠、易排查，不需要引入额外的中间件。</strong></p>
+</div>
+
+<h4>四种分布式事务方案总结</h4>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th>方案</th><th>一致性</th><th>性能</th><th>业务侵入</th><th>适用场景</th><th>代表</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>2PC</strong></td><td>强一致</td><td>差（阻塞）</td><td>低</td><td>数据库跨库事务</td><td>XA, MySQL XA</td></tr>
+      <tr><td><strong>TCC</strong></td><td>最终一致</td><td>中</td><td>高</td><td>短事务、金融核心</td><td>Seata TCC, Hmily</td></tr>
+      <tr><td><strong>SAGA</strong></td><td>最终一致</td><td>好</td><td>中</td><td>长事务、复杂流程</td><td>Seata SAGA, Temporal</td></tr>
+      <tr><td><strong>本地消息表</strong></td><td>最终一致</td><td>好</td><td>低</td><td>跨服务通知、异步流程</td><td>自研 / RocketMQ事务消息</td></tr>
+    </tbody>
+  </table>
+</div>
+
+</section>
+
+<!-- ============================== CHAPTER 3 ============================== -->
+<section class="chapter" id="chapter3">
+<div class="chapter-header">
+  <span class="chapter-number">Chapter 03</span>
+  <h2>幂等设计</h2>
+</div>
+
+<div class="chapter-intro">
+  <strong>面试价值：</strong>幂等是分布式系统的基础设施保障。网络重试、消息重复、用户双击都会导致操作重复执行。一个缺乏幂等保护的系统在分布式环境下几乎不可能正确工作。
+</div>
+
+<h3 id="idempotent-schemes">五种幂等方案对比</h3>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th>方案</th><th>原理</th><th>优点</th><th>缺点</th><th>适用场景</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>唯一索引</strong></td>
+        <td>数据库唯一约束防止重复插入</td>
+        <td>简单可靠，数据库保证</td>
+        <td>仅适用于插入操作</td>
+        <td>订单创建、用户注册</td>
+      </tr>
+      <tr>
+        <td><strong>Token机制</strong></td>
+        <td>先获取Token，操作时验证并删除Token</td>
+        <td>通用性强，前后端配合</td>
+        <td>需额外存储Token</td>
+        <td>表单提交、防重复点击</td>
+      </tr>
+      <tr>
+        <td><strong>状态机</strong></td>
+        <td>操作前校验当前状态是否允许执行</td>
+        <td>符合业务语义，自然防重</td>
+        <td>需要明确的状态流转图</td>
+        <td>订单状态流转、支付状态</td>
+      </tr>
+      <tr>
+        <td><strong>乐观锁</strong></td>
+        <td>更新时带 version 条件，CAS 原理</td>
+        <td>无额外开销，轻量</td>
+        <td>高并发下重试率高</td>
+        <td>库存扣减、余额更新</td>
+      </tr>
+      <tr>
+        <td><strong>去重表</strong></td>
+        <td>记录已处理的请求ID，重复请求直接返回</td>
+        <td>通用，适用于任何操作</td>
+        <td>需维护去重表，有存储开销</td>
+        <td>消息消费、RPC 调用</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h3 id="idempotent-payment">支付场景多层幂等体系</h3>
+
+<div class="callout levchin">
+  <p><strong>支付系统的幂等不是单一方案，而是多层防线。从前端到网关到服务到数据库，每一层都有幂等保护。这不是过度设计——在真实支付场景中，重复扣款是最严重的事故之一，多层防护是必须的。</strong></p>
+</div>
+
+<div class="diagram">
+  <div class="diagram-title">支付多层幂等防线</div>
+  <svg width="580" height="320" viewBox="0 0 580 320" xmlns="http://www.w3.org/2000/svg">
+    <!-- Layer boxes -->
+    <rect x="30" y="20" width="520" height="50" rx="8" fill="rgba(167,139,250,0.08)" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="50" y="50" font-size="12" font-weight="600" fill="#a78bfa">Layer 1 - 前端防重</text>
+    <text x="250" y="50" font-size="10" fill="currentColor" opacity="0.6">按钮禁用 + 请求去重ID（clientRequestId）</text>
+    
+    <rect x="30" y="85" width="520" height="50" rx="8" fill="rgba(59,130,246,0.08)" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="50" y="115" font-size="12" font-weight="600" fill="#3b82f6">Layer 2 - 网关层</text>
+    <text x="250" y="115" font-size="10" fill="currentColor" opacity="0.6">Redis Token 机制（SETNX requestId, expire 10min）</text>
+    
+    <rect x="30" y="150" width="520" height="50" rx="8" fill="rgba(52,211,153,0.08)" stroke="#34d399" stroke-width="1.5"/>
+    <text x="50" y="180" font-size="12" font-weight="600" fill="#34d399">Layer 3 - 服务层</text>
+    <text x="250" y="180" font-size="10" fill="currentColor" opacity="0.6">状态机校验（只有 PENDING 可以推进到 SUCCESS）</text>
+    
+    <rect x="30" y="215" width="520" height="50" rx="8" fill="rgba(245,158,11,0.08)" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="50" y="245" font-size="12" font-weight="600" fill="#f59e0b">Layer 4 - 数据层</text>
+    <text x="250" y="245" font-size="10" fill="currentColor" opacity="0.6">唯一索引（payment_id + biz_type）+ 乐观锁 version</text>
+    
+    <rect x="30" y="280" width="520" height="30" rx="8" fill="rgba(248,113,113,0.08)" stroke="#f87171" stroke-width="1.5"/>
+    <text x="50" y="300" font-size="12" font-weight="600" fill="#f87171">Layer 5 - 对账兜底</text>
+    <text x="250" y="300" font-size="10" fill="currentColor" opacity="0.6">T+1 对账发现重复扣款 → 自动退款</text>
+    
+    <!-- Arrow -->
+    <text x="10" y="170" font-size="20" fill="currentColor" opacity="0.3">&#8595;</text>
+  </svg>
+  <div class="diagram-caption">每一层都是独立的幂等防线，形成纵深防御体系</div>
+</div>
+
+<h3 id="idempotent-code">幂等实现代码示例</h3>
+
+<h4>方案一：Redis Token 机制</h4>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    Token 防重机制
+  </div>
+  <pre><code><span class="ann">@RestController</span>
+<span class="kw">public class</span> <span class="type">IdempotentController</span> {
+
+    <span class="ann">@Autowired</span>
+    <span class="kw">private</span> <span class="type">StringRedisTemplate</span> redis;
+
+    <span class="cmt">// 1. 获取 Token（页面加载时调用）</span>
+    <span class="ann">@GetMapping</span>(<span class="str">"/token"</span>)
+    <span class="kw">public</span> <span class="type">String</span> <span class="fn">getToken</span>() {
+        <span class="type">String</span> token = UUID.randomUUID().toString();
+        redis.opsForValue().set(<span class="str">"idem:"</span> + token, <span class="str">"1"</span>, <span class="num">10</span>, <span class="type">TimeUnit</span>.MINUTES);
+        <span class="kw">return</span> token;
+    }
+
+    <span class="cmt">// 2. 提交时验证 Token（原子删除 = 验证+消费）</span>
+    <span class="ann">@PostMapping</span>(<span class="str">"/pay"</span>)
+    <span class="kw">public</span> <span class="type">Result</span> <span class="fn">pay</span>(<span class="ann">@RequestHeader</span> <span class="type">String</span> token, <span class="ann">@RequestBody</span> <span class="type">PayRequest</span> req) {
+        <span class="cmt">// Lua 脚本保证原子性：存在则删除返回1，不存在返回0</span>
+        <span class="type">String</span> lua = <span class="str">"if redis.call('exists',KEYS[1])==1 then "</span>
+                   + <span class="str">"return redis.call('del',KEYS[1]) else return 0 end"</span>;
+        <span class="type">Long</span> result = redis.execute(
+            <span class="kw">new</span> <span class="type">DefaultRedisScript</span>&lt;&gt;(lua, <span class="type">Long</span>.class),
+            Collections.singletonList(<span class="str">"idem:"</span> + token));
+
+        <span class="kw">if</span> (result == <span class="num">0L</span>) {
+            <span class="kw">return</span> <span class="type">Result</span>.fail(<span class="str">"请勿重复提交"</span>);
+        }
+        <span class="cmt">// 执行实际支付逻辑</span>
+        <span class="kw">return</span> payService.doPay(req);
+    }
+}</code></pre>
+</div>
+
+<h4>方案二：状态机 + 乐观锁</h4>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    状态机 + 乐观锁 防重
+  </div>
+  <pre><code><span class="ann">@Service</span>
+<span class="kw">public class</span> <span class="type">PaymentService</span> {
+
+    <span class="cmt">// 状态机定义：INIT → PAYING → SUCCESS / FAILED</span>
+    <span class="kw">private static final</span> <span class="type">Map</span>&lt;<span class="type">String</span>, <span class="type">Set</span>&lt;<span class="type">String</span>&gt;&gt; TRANSITIONS = <span class="type">Map</span>.of(
+        <span class="str">"INIT"</span>,    Set.of(<span class="str">"PAYING"</span>),
+        <span class="str">"PAYING"</span>,  Set.of(<span class="str">"SUCCESS"</span>, <span class="str">"FAILED"</span>),
+        <span class="str">"FAILED"</span>,  Set.of(<span class="str">"PAYING"</span>)  <span class="cmt">// 允许重试</span>
+    );
+
+    <span class="ann">@Transactional</span>
+    <span class="kw">public</span> <span class="type">PayResult</span> <span class="fn">processPayment</span>(<span class="type">String</span> paymentId) {
+        <span class="type">Payment</span> payment = paymentMapper.selectById(paymentId);
+
+        <span class="cmt">// 幂等判断：已成功则直接返回</span>
+        <span class="kw">if</span> (<span class="str">"SUCCESS"</span>.equals(payment.getStatus())) {
+            <span class="kw">return</span> <span class="type">PayResult</span>.success(payment);
+        }
+
+        <span class="cmt">// 状态机校验：当前状态能否流转</span>
+        <span class="kw">if</span> (!TRANSITIONS.getOrDefault(payment.getStatus(), Set.of())
+                           .contains(<span class="str">"PAYING"</span>)) {
+            <span class="kw">throw new</span> <span class="type">IllegalStateException</span>(
+                <span class="str">"非法状态流转: "</span> + payment.getStatus() + <span class="str">" → PAYING"</span>);
+        }
+
+        <span class="cmt">// 乐观锁更新：带 version 条件</span>
+        <span class="kw">int</span> rows = paymentMapper.updateStatus(
+            paymentId,
+            <span class="str">"PAYING"</span>,           <span class="cmt">// newStatus</span>
+            payment.getStatus(), <span class="cmt">// expectedOldStatus</span>
+            payment.getVersion() <span class="cmt">// expectedVersion</span>
+        );
+
+        <span class="kw">if</span> (rows == <span class="num">0</span>) {
+            <span class="cmt">// 并发冲突，重试或返回</span>
+            <span class="kw">throw new</span> <span class="type">OptimisticLockException</span>(<span class="str">"并发更新冲突"</span>);
+        }
+
+        <span class="cmt">// 调用第三方支付...</span>
+        <span class="kw">return</span> doExternalPay(payment);
+    }
+}
+
+<span class="cmt">// MyBatis SQL</span>
+<span class="cmt">// UPDATE payment SET status=#{newStatus}, version=version+1</span>
+<span class="cmt">//   WHERE id=#{id} AND status=#{oldStatus} AND version=#{version}</span></code></pre>
+</div>
+
+<h4>方案三：去重表</h4>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    去重表实现
+  </div>
+  <pre><code><span class="cmt">-- 去重表 DDL</span>
+<span class="kw">CREATE TABLE</span> <span class="type">idempotent_record</span> (
+    id          <span class="type">BIGINT</span> AUTO_INCREMENT PRIMARY KEY,
+    request_id  <span class="type">VARCHAR</span>(<span class="num">64</span>) NOT NULL,
+    biz_type    <span class="type">VARCHAR</span>(<span class="num">32</span>) NOT NULL,
+    result      <span class="type">TEXT</span>,
+    create_time <span class="type">DATETIME</span> DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_request_biz (request_id, biz_type)
+);
+
+<span class="cmt">-- Java 使用</span>
+<span class="ann">@Transactional</span>
+<span class="kw">public</span> <span class="type">Result</span> <span class="fn">process</span>(<span class="type">String</span> requestId, <span class="type">String</span> bizType, <span class="type">Supplier</span>&lt;<span class="type">Result</span>&gt; action) {
+    <span class="cmt">// 1. 尝试插入去重记录</span>
+    <span class="kw">try</span> {
+        idempotentMapper.insert(requestId, bizType);
+    } <span class="kw">catch</span> (<span class="type">DuplicateKeyException</span> e) {
+        <span class="cmt">// 2. 重复请求：查询并返回上次结果</span>
+        <span class="type">IdempotentRecord</span> record = idempotentMapper.select(requestId, bizType);
+        <span class="kw">return</span> JSON.parseObject(record.getResult(), <span class="type">Result</span>.class);
+    }
+    <span class="cmt">// 3. 首次执行业务逻辑</span>
+    <span class="type">Result</span> result = action.get();
+    <span class="cmt">// 4. 回填结果</span>
+    idempotentMapper.updateResult(requestId, bizType, JSON.toJSONString(result));
+    <span class="kw">return</span> result;
+}</code></pre>
+</div>
+
+<div class="callout tip">
+  <p><strong>面试加分回答：</strong>"幂等设计的核心原则是<strong>全局唯一标识 + 执行前检查 + 原子性保证</strong>。不同方案本质都是围绕这三点展开，区别在于'唯一标识从哪来'和'检查的存储介质是什么'。"</p>
+</div>
+
+</section>
+
+<!-- ============================== CHAPTER 4 ============================== -->
+<section class="chapter" id="chapter4">
+<div class="chapter-header">
+  <span class="chapter-number">Chapter 04</span>
+  <h2>一致性哈希</h2>
+</div>
+
+<div class="chapter-intro">
+  <strong>面试价值：</strong>一致性哈希是分布式系统数据分片的基础算法。理解哈希环、虚拟节点、数据迁移量等核心概念，是回答缓存集群、分布式存储相关问题的基础。
+</div>
+
+<h3 id="hash-ring">哈希环原理</h3>
+
+<h4>传统哈希取模的问题</h4>
+
+<p>传统方案 <code>hash(key) % N</code> 在节点数 N 变化时，几乎所有 key 的映射都会改变，导致<strong>大规模缓存失效（缓存雪崩）</strong>。</p>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    传统取模 vs 一致性哈希 — 节点扩容时的影响
+  </div>
+  <pre><code><span class="cmt">// 传统取模：3节点扩容到4节点</span>
+hash(<span class="str">"userA"</span>) = <span class="num">7</span>  →  7 % 3 = <span class="num">1</span>(节点1)  →  7 % 4 = <span class="num">3</span>(节点3) <span class="cmt">// 迁移!</span>
+hash(<span class="str">"userB"</span>) = <span class="num">11</span> → 11 % 3 = <span class="num">2</span>(节点2)  → 11 % 4 = <span class="num">3</span>(节点3) <span class="cmt">// 迁移!</span>
+hash(<span class="str">"userC"</span>) = <span class="num">15</span> → 15 % 3 = <span class="num">0</span>(节点0)  → 15 % 4 = <span class="num">3</span>(节点3) <span class="cmt">// 迁移!</span>
+<span class="cmt">// 影响比例：约 75% 的 key 需要迁移！</span>
+
+<span class="cmt">// 一致性哈希：3节点扩容到4节点</span>
+<span class="cmt">// 只有新节点「接管」的那段弧上的 key 需要迁移</span>
+<span class="cmt">// 影响比例：约 1/N = 25% 的 key 需要迁移</span></code></pre>
+</div>
+
+<h4>一致性哈希的核心思想</h4>
+
+<ol>
+  <li>将哈希值空间构成一个 <strong>0 ~ 2^32-1 的环</strong></li>
+  <li>将节点通过哈希映射到环上的某个位置</li>
+  <li>数据的 key 同样映射到环上，<strong>顺时针找到的第一个节点</strong>就是其归属节点</li>
+  <li>节点增删时，只影响相邻区间的数据</li>
+</ol>
+
+<div class="diagram">
+  <div class="diagram-title">一致性哈希环</div>
+  <svg width="480" height="480" viewBox="0 0 480 480" xmlns="http://www.w3.org/2000/svg">
+    <!-- Hash Ring -->
+    <circle cx="240" cy="240" r="180" fill="none" stroke="currentColor" stroke-width="2" opacity="0.2"/>
+    
+    <!-- Degree markers -->
+    <text x="240" y="45" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.3">0</text>
+    <text x="435" y="245" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.3">2^30</text>
+    <text x="240" y="440" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.3">2^31</text>
+    <text x="45" y="245" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.3">3*2^30</text>
+    
+    <!-- Node A - top right (45 degrees) -->
+    <circle cx="367" cy="113" r="14" fill="rgba(59,130,246,0.2)" stroke="#3b82f6" stroke-width="2"/>
+    <text x="367" y="117" text-anchor="middle" font-size="10" font-weight="700" fill="#3b82f6">A</text>
+    <text x="395" y="98" font-size="9" fill="#3b82f6">Node A</text>
+    
+    <!-- Node B - bottom right (160 degrees) -->
+    <circle cx="173" cy="397" r="14" fill="rgba(52,211,153,0.2)" stroke="#34d399" stroke-width="2"/>
+    <text x="173" y="401" text-anchor="middle" font-size="10" font-weight="700" fill="#34d399">B</text>
+    <text x="195" y="420" font-size="9" fill="#34d399">Node B</text>
+    
+    <!-- Node C - left (250 degrees) -->
+    <circle cx="78" cy="178" r="14" fill="rgba(245,158,11,0.2)" stroke="#f59e0b" stroke-width="2"/>
+    <text x="78" y="182" text-anchor="middle" font-size="10" font-weight="700" fill="#f59e0b">C</text>
+    <text x="50" y="160" font-size="9" fill="#f59e0b">Node C</text>
+    
+    <!-- Data keys -->
+    <circle cx="310" cy="72" r="6" fill="#f87171"/>
+    <text x="328" y="68" font-size="9" fill="#f87171">key1→A</text>
+    
+    <circle cx="410" cy="200" r="6" fill="#f87171"/>
+    <text x="430" y="196" font-size="9" fill="#f87171">key2→B</text>
+    
+    <circle cx="120" cy="365" r="6" fill="#f87171"/>
+    <text x="95" y="382" font-size="9" fill="#f87171">key3→B</text>
+    
+    <circle cx="90" cy="280" r="6" fill="#f87171"/>
+    <text x="55" y="295" font-size="9" fill="#f87171">key4→C</text>
+    
+    <circle cx="160" cy="90" r="6" fill="#f87171"/>
+    <text x="130" y="86" font-size="9" fill="#f87171">key5→A</text>
+    
+    <!-- Clockwise arrows -->
+    <path d="M 310 78 Q 340 85 360 100" fill="none" stroke="#f87171" stroke-width="1" stroke-dasharray="2,2" marker-end="url(#arrow-red)"/>
+    <path d="M 165 96 Q 230 70 300 75" fill="none" stroke="#f87171" stroke-width="1" stroke-dasharray="2,2"/>
+    
+    <!-- New node D (dashed - being added) -->
+    <circle cx="350" cy="350" r="14" fill="rgba(167,139,250,0.15)" stroke="#a78bfa" stroke-width="2" stroke-dasharray="4,3"/>
+    <text x="350" y="354" text-anchor="middle" font-size="10" font-weight="700" fill="#a78bfa">D</text>
+    <text x="378" y="368" font-size="9" fill="#a78bfa">+New Node</text>
+    
+    <!-- Annotation for new node -->
+    <text x="380" y="395" font-size="8" fill="currentColor" opacity="0.5">仅 B→D 弧段的</text>
+    <text x="380" y="408" font-size="8" fill="currentColor" opacity="0.5">key 需要迁移到 D</text>
+    
+    <defs>
+      <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#f87171"/>
+      </marker>
+    </defs>
+  </svg>
+  <div class="diagram-caption">Key 顺时针寻找最近的节点；新增节点 D 只影响 B→D 弧段的数据</div>
+</div>
+
+<h3 id="virtual-nodes">虚拟节点解决数据倾斜</h3>
+
+<h4>问题：节点少时数据分布不均</h4>
+<p>当物理节点少时（如3-5个），哈希环上节点分布可能非常不均匀，导致某些节点承载了绝大部分数据。</p>
+
+<h4>解决：虚拟节点 (Virtual Nodes)</h4>
+<p>为每个物理节点创建多个<strong>虚拟节点</strong>，分散映射到哈希环上。虚拟节点越多，数据分布越均匀。</p>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    一致性哈希 + 虚拟节点实现 (Java)
+  </div>
+  <pre><code><span class="kw">public class</span> <span class="type">ConsistentHash</span>&lt;<span class="type">T</span>&gt; {
+
+    <span class="kw">private final int</span> virtualNodes;  <span class="cmt">// 每个物理节点的虚拟节点数</span>
+    <span class="kw">private final</span> <span class="type">TreeMap</span>&lt;<span class="type">Long</span>, <span class="type">T</span>&gt; ring = <span class="kw">new</span> <span class="type">TreeMap</span>&lt;&gt;();
+    <span class="kw">private final</span> <span class="type">HashFunction</span> hashFunction;
+
+    <span class="kw">public</span> <span class="fn">ConsistentHash</span>(<span class="kw">int</span> virtualNodes, <span class="type">Collection</span>&lt;<span class="type">T</span>&gt; nodes) {
+        <span class="kw">this</span>.virtualNodes = virtualNodes;
+        <span class="kw">this</span>.hashFunction = Hashing.murmur3_128(); <span class="cmt">// MurmurHash</span>
+        <span class="kw">for</span> (<span class="type">T</span> node : nodes) {
+            addNode(node);
+        }
+    }
+
+    <span class="cmt">// 添加物理节点 → 创建 N 个虚拟节点</span>
+    <span class="kw">public void</span> <span class="fn">addNode</span>(<span class="type">T</span> node) {
+        <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; virtualNodes; i++) {
+            <span class="type">long</span> hash = hash(node.toString() + <span class="str">"#VN"</span> + i);
+            ring.put(hash, node);
+        }
+    }
+
+    <span class="cmt">// 移除物理节点 → 删除其所有虚拟节点</span>
+    <span class="kw">public void</span> <span class="fn">removeNode</span>(<span class="type">T</span> node) {
+        <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; virtualNodes; i++) {
+            <span class="type">long</span> hash = hash(node.toString() + <span class="str">"#VN"</span> + i);
+            ring.remove(hash);
+        }
+    }
+
+    <span class="cmt">// 根据 key 查找归属节点（顺时针最近）</span>
+    <span class="kw">public</span> <span class="type">T</span> <span class="fn">getNode</span>(<span class="type">String</span> key) {
+        <span class="kw">if</span> (ring.isEmpty()) <span class="kw">return null</span>;
+        <span class="type">long</span> hash = hash(key);
+        <span class="cmt">// ceilingEntry: 大于等于 hash 的最小 entry</span>
+        <span class="type">Map.Entry</span>&lt;<span class="type">Long</span>, <span class="type">T</span>&gt; entry = ring.ceilingEntry(hash);
+        <span class="kw">if</span> (entry == <span class="kw">null</span>) {
+            <span class="cmt">// 超过最大值，回到环的起点</span>
+            entry = ring.firstEntry();
+        }
+        <span class="kw">return</span> entry.getValue();
+    }
+
+    <span class="kw">private long</span> <span class="fn">hash</span>(<span class="type">String</span> key) {
+        <span class="kw">return</span> hashFunction.hashString(key, StandardCharsets.UTF_8).asLong();
+    }
+}
+
+<span class="cmt">// 使用示例</span>
+<span class="type">ConsistentHash</span>&lt;<span class="type">String</span>&gt; ch = <span class="kw">new</span> <span class="type">ConsistentHash</span>&lt;&gt;(
+    <span class="num">150</span>,  <span class="cmt">// 每个物理节点150个虚拟节点</span>
+    Arrays.asList(<span class="str">"192.168.1.1"</span>, <span class="str">"192.168.1.2"</span>, <span class="str">"192.168.1.3"</span>)
+);
+
+<span class="type">String</span> targetNode = ch.getNode(<span class="str">"user:10086"</span>);
+<span class="cmt">// → "192.168.1.2"</span></code></pre>
+</div>
+
+<div class="callout tip">
+  <p><strong>虚拟节点数量经验值：</strong>Redis Cluster 用 16384 个 slot；一般建议每个物理节点 100~200 个虚拟节点。虚拟节点越多分布越均匀，但内存开销也越大。业界通常 150 是个好的平衡点。</p>
+</div>
+
+<h3 id="data-sharding">数据分片策略对比</h3>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th>策略</th><th>原理</th><th>扩容迁移量</th><th>负载均衡</th><th>代表系统</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>取模哈希</strong></td>
+        <td>hash(key) % N</td>
+        <td>约 (N-1)/N 的数据</td>
+        <td>均匀（理论上）</td>
+        <td>早期 Memcached</td>
+      </tr>
+      <tr>
+        <td><strong>一致性哈希</strong></td>
+        <td>哈希环 + 顺时针</td>
+        <td>约 1/N 的数据</td>
+        <td>需虚拟节点保证</td>
+        <td>Cassandra, DynamoDB</td>
+      </tr>
+      <tr>
+        <td><strong>哈希槽 (Hash Slot)</strong></td>
+        <td>固定槽数 + 槽分配表</td>
+        <td>按需迁移指定槽</td>
+        <td>手动/自动再平衡</td>
+        <td>Redis Cluster (16384槽)</td>
+      </tr>
+      <tr>
+        <td><strong>范围分片</strong></td>
+        <td>按 key 范围划分</td>
+        <td>仅分裂的范围</td>
+        <td>可能热点不均</td>
+        <td>HBase, TiKV</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="callout warn">
+  <p><strong>面试常见追问：Redis Cluster 为什么用哈希槽而不用一致性哈希？</strong>答：因为哈希槽方案可以精确控制每个槽的归属，便于手动调整负载；而一致性哈希在节点权重不同时难以精细控制。Redis 选择 16384 个槽是在集群规模（建议不超过1000节点）和通信开销（心跳包携带 bitmap）之间的平衡。</p>
+</div>
+
+<div class="callout levchin">
+  <p><strong>选择分片策略时，真正要考虑的不只是"数据怎么分"，更重要的是"扩容时数据怎么迁移"和"热点怎么处理"。在支付系统中，我们用账户ID哈希分片做基础路由，但要配合热点账户的独立处理——比如商户收款账户的并发写入远高于普通用户，需要单独的分桶策略。</strong></p>
+</div>
+
+<h4>一致性哈希在缓存集群中的应用</h4>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    缓存集群路由示例
+  </div>
+  <pre><code><span class="ann">@Component</span>
+<span class="kw">public class</span> <span class="type">CacheClusterRouter</span> {
+
+    <span class="kw">private</span> <span class="type">ConsistentHash</span>&lt;<span class="type">CacheNode</span>&gt; hashRing;
+
+    <span class="ann">@PostConstruct</span>
+    <span class="kw">public void</span> <span class="fn">init</span>() {
+        <span class="type">List</span>&lt;<span class="type">CacheNode</span>&gt; nodes = discoveryClient.getInstances(<span class="str">"cache-service"</span>);
+        hashRing = <span class="kw">new</span> <span class="type">ConsistentHash</span>&lt;&gt;(<span class="num">150</span>, nodes);
+    }
+
+    <span class="kw">public</span> <span class="type">String</span> <span class="fn">get</span>(<span class="type">String</span> key) {
+        <span class="type">CacheNode</span> node = hashRing.getNode(key);
+        <span class="kw">return</span> node.getClient().get(key);
+    }
+
+    <span class="kw">public void</span> <span class="fn">put</span>(<span class="type">String</span> key, <span class="type">String</span> value) {
+        <span class="type">CacheNode</span> node = hashRing.getNode(key);
+        node.getClient().set(key, value);
+    }
+
+    <span class="cmt">// 节点上线：只需预热新节点承接的 key</span>
+    <span class="kw">public void</span> <span class="fn">onNodeAdded</span>(<span class="type">CacheNode</span> newNode) {
+        hashRing.addNode(newNode);
+        <span class="cmt">// 新节点承接的 key 会自然通过 cache miss → DB → 回填 完成预热</span>
+        log.info(<span class="str">"Node added: {}, affected ~{}% keys"</span>,
+                 newNode, <span class="num">100</span> / hashRing.getPhysicalNodeCount());
+    }
+
+    <span class="cmt">// 节点下线：其 key 自动路由到下一个节点</span>
+    <span class="kw">public void</span> <span class="fn">onNodeRemoved</span>(<span class="type">CacheNode</span> node) {
+        hashRing.removeNode(node);
+        <span class="cmt">// 该节点的 key 会产生 cache miss，逐步由下一节点承接</span>
+    }
+}</code></pre>
+</div>
+
+</section>
+
+<!-- ============================== CHAPTER 5: HIGH-FREQ Q&A ============================== -->
+<section class="chapter" id="chapter5">
+<div class="chapter-header">
+  <span class="chapter-number">Chapter 05</span>
+  <h2>高频面试 Q&amp;A 精选</h2>
+</div>
+
+<div class="chapter-intro">
+  <strong>实战价值：</strong>以下精选面试中反复出现的深度追问，每一题都需要结合上述理论框架给出系统性回答。不仅要说"是什么"，更要说"为什么"和"怎么做"。
+</div>
+
+<!-- Q1 -->
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q1</span>
+    <p>如何设计一个跨行转账系统？请描述核心链路的一致性保障。</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p><strong>分层设计思路：</strong></p>
+  </div>
+</div>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    跨行转账核心链路设计
+  </div>
+  <pre><code><span class="cmt">/*
+ * 跨行转账三阶段设计：
+ * 1. 本行扣款（强一致，TCC）
+ * 2. 发起跨行请求（可靠消息）
+ * 3. 对方行入账（异步 + 对账兜底）
+ */</span>
+
+<span class="cmt">// 阶段1：本行扣款（TCC 模式）</span>
+<span class="kw">class</span> <span class="type">DebitTccService</span> {
+    <span class="cmt">// Try: 冻结转出金额</span>
+    <span class="kw">void</span> <span class="fn">tryDebit</span>(txId, accountId, amount) {
+        account.available -= amount;
+        account.frozen += amount;
+        record(txId, TRYING);
+    }
+    <span class="cmt">// Confirm: 真正扣减冻结</span>
+    <span class="kw">void</span> <span class="fn">confirmDebit</span>(txId) { account.frozen -= amount; record(txId, CONFIRMED); }
+    <span class="cmt">// Cancel: 解冻</span>
+    <span class="kw">void</span> <span class="fn">cancelDebit</span>(txId) { account.frozen -= amount; account.available += amount; }
+}
+
+<span class="cmt">// 阶段2：可靠消息投递（本地消息表）</span>
+<span class="ann">@Transactional</span>
+<span class="kw">void</span> <span class="fn">afterDebitConfirmed</span>(txId) {
+    <span class="cmt">// 与 Confirm 在同一事务中写入消息表</span>
+    localMessageTable.insert(txId, <span class="str">"CROSS_BANK_TRANSFER"</span>, payload);
+}
+
+<span class="cmt">// 阶段3：对方行处理（异步 + 重试 + 对账）</span>
+<span class="cmt">// - 收到消息后入账</span>
+<span class="cmt">// - 入账失败则重试（最多3次）</span>
+<span class="cmt">// - 最终失败走 T+1 对账补偿（退款到原账户）</span></code></pre>
+</div>
+
+<div class="callout tip">
+  <p><strong>回答要点：</strong>强调"本行操作用 TCC 保证强一致，跨行操作用可靠消息保证最终一致，对账机制兜底"这个分层思路。面试官看的是你对不同一致性级别的精确把握。</p>
+</div>
+
+<!-- Q2 -->
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q2</span>
+    <p>分布式事务为什么不直接用 2PC？TCC 相比 2PC 解决了什么问题？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p><strong>核心区别在于锁的粒度和持有时间：</strong></p>
+  </div>
+</div>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th>维度</th><th>2PC</th><th>TCC</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>锁层面</strong></td><td>数据库行锁/表锁</td><td>业务层面的资源预留</td></tr>
+      <tr><td><strong>锁持有时间</strong></td><td>整个事务期间（可能分钟级）</td><td>仅 Try 阶段（毫秒到秒级）</td></tr>
+      <tr><td><strong>并发影响</strong></td><td>阻塞其他事务</td><td>冻结金额不影响其他操作</td></tr>
+      <tr><td><strong>故障恢复</strong></td><td>协调者宕机 → 参与者永远阻塞</td><td>TM 可超时自动 Cancel</td></tr>
+      <tr><td><strong>性能</strong></td><td>2次网络 RT + 全程持锁</td><td>3次网络 RT 但无全局锁</td></tr>
+      <tr><td><strong>跨系统</strong></td><td>要求所有参与者支持 XA</td><td>任何系统只要实现接口即可</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p><strong>结论：</strong>2PC 的问题不是"理论错误"，而是"工程代价太高"。在高并发互联网场景下，全局锁 + 同步阻塞 = 系统瘫痪。TCC 把"数据库锁"变成了"业务层预留"，粒度更细、持有时间更短、容错能力更强。</p>
+
+<!-- Q3 -->
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q3</span>
+    <p>如果下游服务 Confirm 一直失败怎么办？TCC 框架是怎么保证最终成功的？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p><strong>TCC 框架的重试和恢复机制：</strong></p>
+  </div>
+</div>
+
+<ol>
+  <li><strong>事务日志持久化</strong>：TCC 框架在每个阶段转换时写入事务日志（通常存在数据库或分布式存储中）</li>
+  <li><strong>异步重试</strong>：Confirm/Cancel 失败后，框架会按照退避策略（如 1s, 2s, 4s, 8s...）持续重试</li>
+  <li><strong>超时升级</strong>：超过最大重试次数后，转为人工告警处理</li>
+  <li><strong>幂等保证</strong>：每次重试 Confirm/Cancel 必须是幂等的，否则重试会造成数据错误</li>
+</ol>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    TCC 框架恢复机制伪代码
+  </div>
+  <pre><code><span class="cmt">// TCC 事务恢复定时任务</span>
+<span class="ann">@Scheduled</span>(fixedDelay = <span class="num">30000</span>)
+<span class="kw">public void</span> <span class="fn">recoverUnfinishedTransactions</span>() {
+    <span class="cmt">// 查找超时未完成的事务</span>
+    <span class="type">List</span>&lt;<span class="type">TccTransaction</span>&gt; unfinished = txLogRepository
+        .findByStatusInAndModifiedBefore(
+            Arrays.asList(TRYING, CONFIRMING, CANCELLING),
+            Instant.now().minus(<span class="num">60</span>, ChronoUnit.SECONDS)
+        );
+
+    <span class="kw">for</span> (<span class="type">TccTransaction</span> tx : unfinished) {
+        <span class="kw">if</span> (tx.getRetryCount() >= MAX_RETRY) {
+            tx.setStatus(REQUIRES_MANUAL_INTERVENTION);
+            alertService.sendAlert(tx);
+            <span class="kw">continue</span>;
+        }
+
+        <span class="kw">if</span> (tx.getStatus() == TRYING) {
+            <span class="cmt">// Try 超时 → 执行 Cancel（安全回滚）</span>
+            executeCancelWithRetry(tx);
+        } <span class="kw">else if</span> (tx.getStatus() == CONFIRMING) {
+            <span class="cmt">// Confirm 中途失败 → 继续重试 Confirm</span>
+            executeConfirmWithRetry(tx);
+        } <span class="kw">else if</span> (tx.getStatus() == CANCELLING) {
+            <span class="cmt">// Cancel 中途失败 → 继续重试 Cancel</span>
+            executeCancelWithRetry(tx);
+        }
+    }
+}</code></pre>
+</div>
+
+<!-- Q4 -->
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q4</span>
+    <p>一致性哈希中，如何处理节点宕机时的数据可用性？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p><strong>三种策略（以缓存集群为例）：</strong></p>
+  </div>
+</div>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th>策略</th><th>做法</th><th>优点</th><th>缺点</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>自然接管</strong></td>
+        <td>宕机节点的 key 自动路由到下一节点，产生 cache miss 后回源</td>
+        <td>零配置，自动容错</td>
+        <td>瞬间大量 cache miss，可能引发缓存雪崩</td>
+      </tr>
+      <tr>
+        <td><strong>数据复制</strong></td>
+        <td>每个 key 写入顺时针的 N 个节点（如 N=3）</td>
+        <td>读高可用，无 cache miss</td>
+        <td>写放大 N 倍，一致性更复杂</td>
+      </tr>
+      <tr>
+        <td><strong>热备切换</strong></td>
+        <td>每个节点有一个热备节点，宕机时 VIP 漂移</td>
+        <td>切换快，对客户端透明</td>
+        <td>资源浪费（备用节点闲置）</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="callout levchin">
+  <p><strong>在 PayPal 的分布式缓存中，我们选择的是"N=2 副本 + 异步复制"方案。核心思路是：主节点同步写入，副本异步复制。主节点宕机后读副本（可能有毫秒级延迟），同时触发副本提升为主节点。对于支付场景，这个延迟是可接受的。</strong></p>
+</div>
+
+<!-- Q5 -->
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q5</span>
+    <p>如何保证消息不丢失？从生产者到消费者的全链路可靠性设计。</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p><strong>三段式可靠性保障：</strong></p>
+  </div>
+</div>
+
+<div class="diagram">
+  <div class="diagram-title">消息全链路可靠性保障</div>
+  <svg width="620" height="200" viewBox="0 0 620 200" xmlns="http://www.w3.org/2000/svg">
+    <!-- Producer -->
+    <rect x="20" y="70" width="140" height="60" rx="8" fill="rgba(59,130,246,0.1)" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="90" y="95" text-anchor="middle" font-size="11" font-weight="600" fill="#3b82f6">Producer</text>
+    <text x="90" y="115" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.6">本地消息表+重试</text>
+    
+    <!-- MQ -->
+    <rect x="230" y="70" width="140" height="60" rx="8" fill="rgba(167,139,250,0.1)" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="300" y="95" text-anchor="middle" font-size="11" font-weight="600" fill="#a78bfa">MQ Broker</text>
+    <text x="300" y="115" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.6">同步刷盘+多副本</text>
+    
+    <!-- Consumer -->
+    <rect x="440" y="70" width="140" height="60" rx="8" fill="rgba(52,211,153,0.1)" stroke="#34d399" stroke-width="1.5"/>
+    <text x="510" y="95" text-anchor="middle" font-size="11" font-weight="600" fill="#34d399">Consumer</text>
+    <text x="510" y="115" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.6">手动ACK+幂等</text>
+    
+    <!-- Arrows -->
+    <line x1="160" y1="100" x2="230" y2="100" stroke="currentColor" stroke-width="1.5" opacity="0.4" marker-end="url(#arrow-gen)"/>
+    <line x1="370" y1="100" x2="440" y2="100" stroke="currentColor" stroke-width="1.5" opacity="0.4" marker-end="url(#arrow-gen)"/>
+    
+    <!-- Labels below -->
+    <text x="90" y="155" text-anchor="middle" font-size="9" fill="#3b82f6">1. 先写DB再发MQ</text>
+    <text x="90" y="168" text-anchor="middle" font-size="9" fill="#3b82f6">2. 发送失败则重试</text>
+    <text x="300" y="155" text-anchor="middle" font-size="9" fill="#a78bfa">3. 同步刷盘(sync flush)</text>
+    <text x="300" y="168" text-anchor="middle" font-size="9" fill="#a78bfa">4. 主从同步复制</text>
+    <text x="510" y="155" text-anchor="middle" font-size="9" fill="#34d399">5. 业务处理完再ACK</text>
+    <text x="510" y="168" text-anchor="middle" font-size="9" fill="#34d399">6. 消费幂等防重复</text>
+    
+    <defs>
+      <marker id="arrow-gen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" opacity="0.4"/>
+      </marker>
+    </defs>
+  </svg>
+</div>
+
+<!-- Q6 -->
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q6</span>
+    <p>CAP 中"一致性"和 ACID 中"一致性"是同一个概念吗？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p><strong>不是！这是一个常见混淆：</strong></p>
+  </div>
+</div>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th></th><th>CAP 的 Consistency</th><th>ACID 的 Consistency</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>含义</strong></td><td>所有节点在同一时刻看到相同数据 (Linearizability)</td><td>事务将数据库从一个合法状态转到另一个合法状态</td></tr>
+      <tr><td><strong>关注点</strong></td><td>多副本数据一致性</td><td>业务规则和约束完整性</td></tr>
+      <tr><td><strong>层面</strong></td><td>分布式系统层面</td><td>单机数据库层面</td></tr>
+      <tr><td><strong>例子</strong></td><td>主从库读到相同的值</td><td>转账后总金额不变</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="callout warn">
+  <p><strong>面试中千万不要把两者混为一谈！</strong>CAP 的 C 是关于"多节点数据同步"的问题，ACID 的 C 是关于"数据满足业务约束"的问题。它们虽然都叫 Consistency，但讨论的是完全不同的维度。</p>
+</div>
+
+<!-- Q7 -->
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q7</span>
+    <p>SAGA 模式中如何保证隔离性？比如用户看到了中间状态怎么办？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p><strong>SAGA 天然没有隔离性，需要业务层补偿：</strong></p>
+  </div>
+</div>
+
+<ul>
+  <li><strong>语义锁 (Semantic Lock)</strong>：在中间状态加业务标记（如订单状态为"处理中"），前端展示"处理中"而非最终结果</li>
+  <li><strong>交换律 (Commutative Updates)</strong>：设计操作为可交换的，顺序无关紧要</li>
+  <li><strong>悲观视图 (Pessimistic View)</strong>：对外只展示已确认的最终状态，中间态不暴露</li>
+  <li><strong>重读 (Reread Value)</strong>：在做补偿前重新读取数据，确认当前状态</li>
+  <li><strong>版本文件 (Version File)</strong>：记录操作顺序，按序执行避免乱序</li>
+</ul>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    SAGA 语义锁示例
+  </div>
+  <pre><code><span class="cmt">// 订单状态设计 - 用中间状态屏蔽 SAGA 的隔离性缺失</span>
+<span class="kw">enum</span> <span class="type">OrderStatus</span> {
+    CREATED,           <span class="cmt">// 初始创建</span>
+    STOCK_RESERVED,    <span class="cmt">// 库存已预留（T1 完成）</span>
+    PAYMENT_PENDING,   <span class="cmt">// 支付处理中（T2 进行中）</span>
+    PAYMENT_SUCCESS,   <span class="cmt">// 支付成功（T2 完成）</span>
+    SHIPPING,          <span class="cmt">// 发货中（T3 进行中）</span>
+    COMPLETED,         <span class="cmt">// 完成</span>
+    COMPENSATING,      <span class="cmt">// 补偿中（某步失败，正在回滚）</span>
+    CANCELLED          <span class="cmt">// 已取消（补偿完成）</span>
+}
+
+<span class="cmt">// 用户查询时：</span>
+<span class="cmt">// - CREATED ~ PAYMENT_PENDING → 展示 "订单处理中，请稍候"</span>
+<span class="cmt">// - PAYMENT_SUCCESS+ → 展示真实状态</span>
+<span class="cmt">// - COMPENSATING → 展示 "订单处理中"（不暴露内部回滚）</span>
+<span class="cmt">// - CANCELLED → 展示 "订单已取消" + 退款信息</span></code></pre>
+</div>
+
+<!-- Q8 -->
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q8</span>
+    <p>Seata AT 模式和 TCC 模式有什么区别？实际项目中怎么选？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p><strong>对比与选择：</strong></p>
+  </div>
+</div>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th>维度</th><th>Seata AT</th><th>Seata TCC</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>原理</strong></td><td>拦截 SQL，自动生成回滚日志(undo_log)</td><td>业务代码实现 Try/Confirm/Cancel</td></tr>
+      <tr><td><strong>侵入性</strong></td><td>极低，加注解即可</td><td>高，需实现三个方法</td></tr>
+      <tr><td><strong>性能</strong></td><td>中（全局锁 + undo_log 写入）</td><td>高（无全局锁）</td></tr>
+      <tr><td><strong>隔离性</strong></td><td>读已提交（通过全局锁实现）</td><td>由业务保证</td></tr>
+      <tr><td><strong>适用</strong></td><td>CRUD 为主、性能要求不极端的场景</td><td>高并发金融场景</td></tr>
+      <tr><td><strong>限制</strong></td><td>仅支持关系型 DB，不支持 NoSQL</td><td>无限制，任何资源</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p><strong>选择建议：</strong>内部管理系统、中后台服务 → AT 模式（开发快）；支付、交易、高并发C端 → TCC 模式（性能好、控制力强）。</p>
+
+<!-- Q9 -->
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q9</span>
+    <p>分布式系统中如何实现全局唯一ID？有哪些方案？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p><strong>全局唯一ID是幂等和分布式事务的基础设施：</strong></p>
+  </div>
+</div>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th>方案</th><th>原理</th><th>优点</th><th>缺点</th><th>代表</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>UUID</strong></td>
+        <td>128位随机数</td>
+        <td>本地生成，无网络依赖</td>
+        <td>无序、太长（36字符）、索引性能差</td>
+        <td>Java UUID</td>
+      </tr>
+      <tr>
+        <td><strong>雪花算法</strong></td>
+        <td>时间戳+机器ID+序列号</td>
+        <td>有序、高性能、本地生成</td>
+        <td>依赖时钟，时钟回拨问题</td>
+        <td>Twitter Snowflake</td>
+      </tr>
+      <tr>
+        <td><strong>号段模式</strong></td>
+        <td>从DB批量获取ID段</td>
+        <td>简单可靠，天然有序</td>
+        <td>DB是瓶颈，段用完需网络请求</td>
+        <td>美团 Leaf-segment</td>
+      </tr>
+      <tr>
+        <td><strong>Redis INCR</strong></td>
+        <td>Redis原子自增</td>
+        <td>简单、高性能</td>
+        <td>Redis 持久化风险、单点</td>
+        <td>-</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    雪花算法核心结构（64位）
+  </div>
+  <pre><code><span class="cmt">/*
+ * Snowflake ID 结构 (64 bit):
+ * 
+ * 0 - 0000000000 0000000000 0000000000 0000000000 0 - 00000 - 00000 - 000000000000
+ * |   |_______________________________________|     |_____|   |_____|   |__________|
+ * 符号位            41位时间戳                      5位DC    5位机器     12位序列号
+ * (固定0)      (可用69年)                         (32个DC) (32台机器)  (每毫秒4096个)
+ *
+ * 单机 QPS 上限: 4096 * 1000 = 409.6万/秒
+ */</span>
+
+<span class="kw">public class</span> <span class="type">SnowflakeIdGenerator</span> {
+    <span class="kw">private final long</span> datacenterId;
+    <span class="kw">private final long</span> machineId;
+    <span class="kw">private long</span> sequence = <span class="num">0L</span>;
+    <span class="kw">private long</span> lastTimestamp = -<span class="num">1L</span>;
+
+    <span class="kw">public synchronized long</span> <span class="fn">nextId</span>() {
+        <span class="kw">long</span> timestamp = System.currentTimeMillis();
+
+        <span class="cmt">// 时钟回拨检测</span>
+        <span class="kw">if</span> (timestamp &lt; lastTimestamp) {
+            <span class="kw">throw new</span> <span class="type">RuntimeException</span>(
+                <span class="str">"Clock moved backwards by "</span> + (lastTimestamp - timestamp) + <span class="str">"ms"</span>);
+        }
+
+        <span class="kw">if</span> (timestamp == lastTimestamp) {
+            sequence = (sequence + <span class="num">1</span>) &amp; <span class="num">0xFFF</span>; <span class="cmt">// 12位序列号</span>
+            <span class="kw">if</span> (sequence == <span class="num">0</span>) {
+                timestamp = waitNextMillis(lastTimestamp); <span class="cmt">// 序列号用尽，等下一毫秒</span>
+            }
+        } <span class="kw">else</span> {
+            sequence = <span class="num">0L</span>;
+        }
+
+        lastTimestamp = timestamp;
+
+        <span class="kw">return</span> ((timestamp - EPOCH) &lt;&lt; <span class="num">22</span>)
+             | (datacenterId &lt;&lt; <span class="num">17</span>)
+             | (machineId &lt;&lt; <span class="num">12</span>)
+             | sequence;
+    }
+}</code></pre>
+</div>
+
+<!-- Q10 -->
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q10</span>
+    <p>什么是最终一致性？它有几种实现方式？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p><strong>最终一致性不是"不一致"，而是"延迟一致"：</strong></p>
+  </div>
+</div>
+
+<p>最终一致性保证：如果没有新的更新操作，经过一段时间后，所有副本最终都会达到一致状态。不同的实现方式对"一段时间"有不同的约束：</p>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th>一致性模型</th><th>保证</th><th>延迟</th><th>实现</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>强一致性</strong></td><td>写入立即对所有读可见</td><td>0</td><td>Paxos/Raft 同步复制</td></tr>
+      <tr><td><strong>因果一致性</strong></td><td>有因果关系的操作保序</td><td>ms级</td><td>向量时钟/Lamport时间戳</td></tr>
+      <tr><td><strong>读己所写</strong></td><td>自己的写入立即可读</td><td>ms级</td><td>读主库 / session sticky</td></tr>
+      <tr><td><strong>单调读</strong></td><td>不会读到比之前更旧的数据</td><td>ms级</td><td>版本号递增检查</td></tr>
+      <tr><td><strong>最终一致性</strong></td><td>最终所有副本一致</td><td>秒~分钟</td><td>异步复制 + 反熵修复</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="callout tip">
+  <p><strong>面试加分：</strong>不要只说"最终一致性"，要能说出具体的一致性级别。比如"我们的系统用读己所写一致性——用户自己的操作通过读主库保证立即可见，其他用户的读通过从库提供最终一致性，延迟通常在200ms以内。"</p>
+</div>
+
+<h3>分布式事务选型决策树</h3>
+
+<div class="diagram">
+  <div class="diagram-title">分布式事务方案选型决策</div>
+  <svg width="600" height="380" viewBox="0 0 600 380" xmlns="http://www.w3.org/2000/svg">
+    <!-- Start -->
+    <rect x="220" y="10" width="160" height="36" rx="18" fill="rgba(245,158,11,0.15)" stroke="#f59e0b" stroke-width="2"/>
+    <text x="300" y="33" text-anchor="middle" font-size="11" font-weight="600" fill="#f59e0b">需要分布式事务？</text>
+    
+    <!-- Decision 1 -->
+    <rect x="40" y="80" width="160" height="36" rx="6" fill="rgba(59,130,246,0.1)" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="120" y="103" text-anchor="middle" font-size="10" fill="#3b82f6">需要强一致性？</text>
+    
+    <rect x="380" y="80" width="180" height="36" rx="6" fill="rgba(52,211,153,0.1)" stroke="#34d399" stroke-width="1.5"/>
+    <text x="470" y="103" text-anchor="middle" font-size="10" fill="#34d399">最终一致性可接受？</text>
+    
+    <!-- Lines from start -->
+    <line x1="260" y1="46" x2="120" y2="80" stroke="currentColor" stroke-width="1" opacity="0.3"/>
+    <line x1="340" y1="46" x2="470" y2="80" stroke="currentColor" stroke-width="1" opacity="0.3"/>
+    <text x="170" y="60" font-size="9" fill="currentColor" opacity="0.5">是</text>
+    <text x="420" y="60" font-size="9" fill="currentColor" opacity="0.5">是</text>
+    
+    <!-- Level 2 -->
+    <rect x="10" y="155" width="100" height="36" rx="6" fill="rgba(248,113,113,0.1)" stroke="#f87171" stroke-width="1.5"/>
+    <text x="60" y="177" text-anchor="middle" font-size="10" font-weight="600" fill="#f87171">2PC/XA</text>
+    
+    <rect x="140" y="155" width="100" height="36" rx="6" fill="rgba(167,139,250,0.1)" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="190" y="177" text-anchor="middle" font-size="10" font-weight="600" fill="#a78bfa">TCC</text>
+    
+    <!-- From decision 1 -->
+    <line x1="80" y1="116" x2="60" y2="155" stroke="currentColor" stroke-width="1" opacity="0.3"/>
+    <line x1="160" y1="116" x2="190" y2="155" stroke="currentColor" stroke-width="1" opacity="0.3"/>
+    <text x="50" y="140" font-size="8" fill="currentColor" opacity="0.5">低并发</text>
+    <text x="165" y="140" font-size="8" fill="currentColor" opacity="0.5">高并发</text>
+    
+    <!-- Right side level 2 -->
+    <rect x="350" y="155" width="100" height="36" rx="6" fill="rgba(52,211,153,0.1)" stroke="#34d399" stroke-width="1.5"/>
+    <text x="400" y="177" text-anchor="middle" font-size="10" font-weight="600" fill="#34d399">SAGA</text>
+    
+    <rect x="480" y="155" width="110" height="36" rx="6" fill="rgba(245,158,11,0.1)" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="535" y="177" text-anchor="middle" font-size="10" font-weight="600" fill="#f59e0b">本地消息表</text>
+    
+    <line x1="430" y1="116" x2="400" y2="155" stroke="currentColor" stroke-width="1" opacity="0.3"/>
+    <line x1="510" y1="116" x2="535" y2="155" stroke="currentColor" stroke-width="1" opacity="0.3"/>
+    <text x="395" y="140" font-size="8" fill="currentColor" opacity="0.5">长流程</text>
+    <text x="520" y="140" font-size="8" fill="currentColor" opacity="0.5">简单异步</text>
+    
+    <!-- Descriptions -->
+    <text x="60" y="210" text-anchor="middle" font-size="8" fill="currentColor" opacity="0.5">数据库跨库</text>
+    <text x="60" y="222" text-anchor="middle" font-size="8" fill="currentColor" opacity="0.5">管理后台</text>
+    
+    <text x="190" y="210" text-anchor="middle" font-size="8" fill="currentColor" opacity="0.5">转账/支付</text>
+    <text x="190" y="222" text-anchor="middle" font-size="8" fill="currentColor" opacity="0.5">库存预扣</text>
+    
+    <text x="400" y="210" text-anchor="middle" font-size="8" fill="currentColor" opacity="0.5">下单→扣库存</text>
+    <text x="400" y="222" text-anchor="middle" font-size="8" fill="currentColor" opacity="0.5">→支付→发货</text>
+    
+    <text x="535" y="210" text-anchor="middle" font-size="8" fill="currentColor" opacity="0.5">订单→通知</text>
+    <text x="535" y="222" text-anchor="middle" font-size="8" fill="currentColor" opacity="0.5">积分→优惠券</text>
+    
+    <!-- Summary box -->
+    <rect x="50" y="260" width="500" height="100" rx="8" fill="rgba(245,158,11,0.04)" stroke="#f59e0b" stroke-width="1" stroke-dasharray="4,4"/>
+    <text x="300" y="285" text-anchor="middle" font-size="11" font-weight="600" fill="#f59e0b">选型核心原则</text>
+    <text x="300" y="308" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.7">1. 能用最终一致性的，绝不用强一致性</text>
+    <text x="300" y="326" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.7">2. 能用本地消息表的，绝不用 TCC/SAGA</text>
+    <text x="300" y="344" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.7">3. 只有核心资金链路才值得 TCC 的开发成本</text>
+  </svg>
+</div>
+
+<div class="callout levchin">
+  <p><strong>分布式事务选型的第一原则：能不用分布式事务就不用。大量场景可以通过合理的服务拆分、数据局部性设计来避免分布式事务。当你必须跨服务保证一致性时，先考虑最简单的本地消息表，只有它不满足需求时才升级到 TCC 或 SAGA。</strong></p>
+</div>
+
+</section>
+
+<!-- ============================== FOOTER ============================== -->
+<hr>
+
+<div class="page-footer">
+  <p>分布式系统面试深度指南 · Max Levchin 支付系统视角 · 覆盖 CAP/事务/幂等/一致性哈希</p>
+</div>
+
+</main>
+</div>
+
+<button class="back-to-top" aria-label="回到顶部">&uarr;</button>
+<script src="./shared/script.js"></script>
+</body>
+</html>

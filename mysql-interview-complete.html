@@ -2215,6 +2215,349 @@ public void processFile(Long orderId) throws IOException {
 
     <div class="key-point">阿里巴巴Java开发手册明确规定：<code>@Transactional</code>必须指定 <code>rollbackFor = Exception.class</code>。这应该是团队代码规范的一部分。</div>
 
+    <!-- 事务传播行为系统讲解 -->
+    <h3>前置知识：Spring事务传播行为（Propagation）全解</h3>
+    <p>在理解"坑3"之前，需要先系统掌握Spring的<strong>7种事务传播行为</strong>。传播行为定义的是：当一个事务方法被另一个事务方法调用时，事务应该如何传播（是加入已有事务？还是新建？还是挂起？）。</p>
+
+    <h4>7种传播行为完整对比</h4>
+    <table>
+      <thead>
+        <tr>
+          <th>传播行为</th>
+          <th>说明</th>
+          <th>外层有事务时</th>
+          <th>外层无事务时</th>
+          <th>典型场景</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>REQUIRED</strong>（默认）</td>
+          <td>有事务就加入，没有就新建</td>
+          <td>加入外层事务</td>
+          <td>自己新建事务</td>
+          <td>大多数业务方法</td>
+        </tr>
+        <tr>
+          <td><strong>REQUIRES_NEW</strong></td>
+          <td>无论如何都新建事务</td>
+          <td>挂起外层，新建独立事务</td>
+          <td>自己新建事务</td>
+          <td>操作日志、审计记录（独立于主事务）</td>
+        </tr>
+        <tr>
+          <td><strong>NESTED</strong></td>
+          <td>嵌套事务（基于savepoint）</td>
+          <td>在外层事务内创建savepoint</td>
+          <td>等同于REQUIRED，新建事务</td>
+          <td>部分失败可回滚到保存点，不影响外层</td>
+        </tr>
+        <tr>
+          <td><strong>SUPPORTS</strong></td>
+          <td>有就加入，没有就非事务执行</td>
+          <td>加入外层事务</td>
+          <td>以非事务方式执行</td>
+          <td>纯查询方法</td>
+        </tr>
+        <tr>
+          <td><strong>NOT_SUPPORTED</strong></td>
+          <td>以非事务方式执行</td>
+          <td>挂起外层事务，非事务执行</td>
+          <td>以非事务方式执行</td>
+          <td>非关键操作、大批量查询</td>
+        </tr>
+        <tr>
+          <td><strong>MANDATORY</strong></td>
+          <td>必须在事务中调用</td>
+          <td>加入外层事务</td>
+          <td>抛出IllegalTransactionStateException</td>
+          <td>强制要求调用方有事务的核心方法</td>
+        </tr>
+        <tr>
+          <td><strong>NEVER</strong></td>
+          <td>不允许在事务中调用</td>
+          <td>抛出IllegalTransactionStateException</td>
+          <td>以非事务方式执行</td>
+          <td>确保方法不会意外参与事务</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h4>REQUIRED vs REQUIRES_NEW vs NESTED 图解（面试重点）</h4>
+    <p>面试中最高频考的是前三种传播行为的区别，特别是它们在<strong>回滚行为</strong>上的差异：</p>
+
+    <div class="svg-container">
+      <svg width="750" height="620" viewBox="0 0 750 620" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="propGradA" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" style="stop-color:#0f3460;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#16213e;stop-opacity:1" />
+          </linearGradient>
+          <linearGradient id="propGradB" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" style="stop-color:#1a1a2e;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#2d132c;stop-opacity:1" />
+          </linearGradient>
+          <marker id="arrowProp" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#e94560" />
+          </marker>
+          <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#4ecca3" />
+          </marker>
+        </defs>
+
+        <!-- Title -->
+        <text x="375" y="30" text-anchor="middle" fill="#e94560" font-size="16" font-weight="bold" font-family="sans-serif">事务传播行为对比（methodA 调用 methodB）</text>
+
+        <!-- === REQUIRED === -->
+        <text x="125" y="65" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold" font-family="sans-serif">REQUIRED（默认）</text>
+        <!-- Outer box = single transaction -->
+        <rect x="25" y="80" width="200" height="160" rx="10" fill="url(#propGradA)" stroke="#e94560" stroke-width="2"/>
+        <text x="45" y="102" fill="#e94560" font-size="11" font-weight="bold" font-family="sans-serif">同一个事务 Transaction</text>
+        <!-- methodA -->
+        <rect x="45" y="112" width="160" height="40" rx="6" fill="#1a4080" stroke="#4ecca3" stroke-width="1.5"/>
+        <text x="125" y="137" text-anchor="middle" fill="#fff" font-size="12" font-family="sans-serif">methodA()</text>
+        <!-- Arrow -->
+        <path d="M125 152 L125 172" stroke="#aaa" stroke-width="1.5" marker-end="url(#arrowProp)"/>
+        <!-- methodB -->
+        <rect x="45" y="178" width="160" height="40" rx="6" fill="#1a4080" stroke="#4ecca3" stroke-width="1.5"/>
+        <text x="125" y="203" text-anchor="middle" fill="#fff" font-size="12" font-family="sans-serif">methodB()</text>
+        <!-- Note -->
+        <text x="125" y="255" text-anchor="middle" fill="#ccc" font-size="10" font-family="sans-serif">B异常 → 整个事务回滚</text>
+        <text x="125" y="270" text-anchor="middle" fill="#ccc" font-size="10" font-family="sans-serif">A和B共存亡</text>
+
+        <!-- === REQUIRES_NEW === -->
+        <text x="375" y="65" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold" font-family="sans-serif">REQUIRES_NEW</text>
+        <!-- Outer Transaction (A) -->
+        <rect x="275" y="80" width="200" height="100" rx="10" fill="url(#propGradA)" stroke="#e94560" stroke-width="2"/>
+        <text x="295" y="102" fill="#e94560" font-size="11" font-weight="bold" font-family="sans-serif">Transaction 1 (A的事务)</text>
+        <rect x="295" y="112" width="160" height="40" rx="6" fill="#1a4080" stroke="#4ecca3" stroke-width="1.5"/>
+        <text x="375" y="137" text-anchor="middle" fill="#fff" font-size="12" font-family="sans-serif">methodA()</text>
+        <!-- Arrow between two transactions -->
+        <path d="M375 180 L375 200" stroke="#e94560" stroke-width="1.5" stroke-dasharray="4,3"/>
+        <text x="375" y="195" text-anchor="middle" fill="#e94560" font-size="9" font-family="sans-serif">挂起A</text>
+        <!-- Inner Transaction (B) - separate -->
+        <rect x="275" y="205" width="200" height="80" rx="10" fill="url(#propGradB)" stroke="#ff6b6b" stroke-width="2"/>
+        <text x="295" y="227" fill="#ff6b6b" font-size="11" font-weight="bold" font-family="sans-serif">Transaction 2 (独立事务)</text>
+        <rect x="295" y="237" width="160" height="35" rx="6" fill="#2d132c" stroke="#ff6b6b" stroke-width="1.5"/>
+        <text x="375" y="259" text-anchor="middle" fill="#fff" font-size="12" font-family="sans-serif">methodB()</text>
+        <!-- Note -->
+        <text x="375" y="305" text-anchor="middle" fill="#ccc" font-size="10" font-family="sans-serif">B异常 → 只回滚Transaction 2</text>
+        <text x="375" y="320" text-anchor="middle" fill="#ccc" font-size="10" font-family="sans-serif">A可catch后继续提交</text>
+
+        <!-- === NESTED === -->
+        <text x="625" y="65" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold" font-family="sans-serif">NESTED</text>
+        <!-- Outer Transaction (A) - contains savepoint -->
+        <rect x="525" y="80" width="200" height="200" rx="10" fill="url(#propGradA)" stroke="#e94560" stroke-width="2"/>
+        <text x="545" y="102" fill="#e94560" font-size="11" font-weight="bold" font-family="sans-serif">同一个事务 Transaction</text>
+        <rect x="545" y="112" width="160" height="40" rx="6" fill="#1a4080" stroke="#4ecca3" stroke-width="1.5"/>
+        <text x="625" y="137" text-anchor="middle" fill="#fff" font-size="12" font-family="sans-serif">methodA()</text>
+        <!-- Savepoint marker -->
+        <path d="M545 162 L705 162" stroke="#f0a500" stroke-width="1.5" stroke-dasharray="6,3"/>
+        <text x="625" y="175" text-anchor="middle" fill="#f0a500" font-size="10" font-weight="bold" font-family="sans-serif">--- SAVEPOINT ---</text>
+        <!-- methodB inside savepoint -->
+        <rect x="555" y="185" width="140" height="35" rx="6" fill="#1a4080" stroke="#f0a500" stroke-width="1.5"/>
+        <text x="625" y="207" text-anchor="middle" fill="#fff" font-size="12" font-family="sans-serif">methodB()</text>
+        <!-- Arrow showing rollback scope -->
+        <text x="625" y="240" text-anchor="middle" fill="#f0a500" font-size="9" font-family="sans-serif">ROLLBACK TO SAVEPOINT</text>
+        <!-- Note -->
+        <text x="625" y="300" text-anchor="middle" fill="#ccc" font-size="10" font-family="sans-serif">B异常 → 回滚到savepoint</text>
+        <text x="625" y="315" text-anchor="middle" fill="#ccc" font-size="10" font-family="sans-serif">A可catch后继续（A提交则全提交）</text>
+
+        <!-- Summary comparison section -->
+        <rect x="25" y="350" width="700" height="255" rx="10" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+        <text x="375" y="378" text-anchor="middle" fill="#e94560" font-size="14" font-weight="bold" font-family="sans-serif">三者核心区别总结</text>
+
+        <!-- Column headers -->
+        <text x="130" y="405" text-anchor="middle" fill="#4ecca3" font-size="12" font-weight="bold" font-family="sans-serif">对比维度</text>
+        <text x="300" y="405" text-anchor="middle" fill="#4ecca3" font-size="12" font-weight="bold" font-family="sans-serif">REQUIRED</text>
+        <text x="470" y="405" text-anchor="middle" fill="#4ecca3" font-size="12" font-weight="bold" font-family="sans-serif">REQUIRES_NEW</text>
+        <text x="640" y="405" text-anchor="middle" fill="#4ecca3" font-size="12" font-weight="bold" font-family="sans-serif">NESTED</text>
+
+        <line x1="45" y1="415" x2="705" y2="415" stroke="#30363d" stroke-width="1"/>
+
+        <!-- Row 1: 事务个数 -->
+        <text x="130" y="438" text-anchor="middle" fill="#ccc" font-size="11" font-family="sans-serif">事务个数</text>
+        <text x="300" y="438" text-anchor="middle" fill="#fff" font-size="11" font-family="sans-serif">1个</text>
+        <text x="470" y="438" text-anchor="middle" fill="#fff" font-size="11" font-family="sans-serif">2个独立事务</text>
+        <text x="640" y="438" text-anchor="middle" fill="#fff" font-size="11" font-family="sans-serif">1个（带savepoint）</text>
+
+        <!-- Row 2: B回滚影响 -->
+        <text x="130" y="468" text-anchor="middle" fill="#ccc" font-size="11" font-family="sans-serif">B回滚影响A?</text>
+        <text x="300" y="468" text-anchor="middle" fill="#ff6b6b" font-size="11" font-family="sans-serif">是，全部回滚</text>
+        <text x="470" y="468" text-anchor="middle" fill="#4ecca3" font-size="11" font-family="sans-serif">否，互相独立</text>
+        <text x="640" y="468" text-anchor="middle" fill="#4ecca3" font-size="11" font-family="sans-serif">否，回滚到savepoint</text>
+
+        <!-- Row 3: A回滚影响B -->
+        <text x="130" y="498" text-anchor="middle" fill="#ccc" font-size="11" font-family="sans-serif">A回滚影响B?</text>
+        <text x="300" y="498" text-anchor="middle" fill="#ff6b6b" font-size="11" font-family="sans-serif">是，全部回滚</text>
+        <text x="470" y="498" text-anchor="middle" fill="#4ecca3" font-size="11" font-family="sans-serif">否，B已独立提交</text>
+        <text x="640" y="498" text-anchor="middle" fill="#ff6b6b" font-size="11" font-family="sans-serif">是，A回滚则B也回滚</text>
+
+        <!-- Row 4: 数据库连接 -->
+        <text x="130" y="528" text-anchor="middle" fill="#ccc" font-size="11" font-family="sans-serif">数据库连接</text>
+        <text x="300" y="528" text-anchor="middle" fill="#fff" font-size="11" font-family="sans-serif">共用同一连接</text>
+        <text x="470" y="528" text-anchor="middle" fill="#fff" font-size="11" font-family="sans-serif">各用独立连接</text>
+        <text x="640" y="528" text-anchor="middle" fill="#fff" font-size="11" font-family="sans-serif">共用同一连接</text>
+
+        <!-- Row 5: 底层实现 -->
+        <text x="130" y="558" text-anchor="middle" fill="#ccc" font-size="11" font-family="sans-serif">底层实现</text>
+        <text x="300" y="558" text-anchor="middle" fill="#fff" font-size="11" font-family="sans-serif">同一Connection</text>
+        <text x="470" y="558" text-anchor="middle" fill="#fff" font-size="11" font-family="sans-serif">新Connection + suspend</text>
+        <text x="640" y="558" text-anchor="middle" fill="#fff" font-size="11" font-family="sans-serif">SAVEPOINT + ROLLBACK TO</text>
+
+        <!-- Row 6: 性能开销 -->
+        <text x="130" y="588" text-anchor="middle" fill="#ccc" font-size="11" font-family="sans-serif">性能开销</text>
+        <text x="300" y="588" text-anchor="middle" fill="#4ecca3" font-size="11" font-family="sans-serif">最低</text>
+        <text x="470" y="588" text-anchor="middle" fill="#ff6b6b" font-size="11" font-family="sans-serif">最高（新连接）</text>
+        <text x="640" y="588" text-anchor="middle" fill="#f0a500" font-size="11" font-family="sans-serif">中等</text>
+      </svg>
+    </div>
+
+    <h4>代码示例：三种传播行为的实际效果</h4>
+    <pre><code class="sql">// ==================== REQUIRED（默认）====================
+// A和B在同一个事务中，任何一方异常都会导致整体回滚
+
+@Service
+public class OrderService {
+    @Autowired
+    private InventoryService inventoryService;
+
+    @Transactional(rollbackFor = Exception.class)
+    public void createOrder(OrderDTO dto) {
+        orderMapper.insert(dto);              // 操作1
+        inventoryService.deduct(dto);         // 调用B（默认REQUIRED，加入A的事务）
+        // 如果deduct()抛异常，insert也会回滚
+    }
+}
+
+@Service
+public class InventoryService {
+    @Transactional(rollbackFor = Exception.class)  // 默认REQUIRED
+    public void deduct(OrderDTO dto) {
+        inventoryMapper.decrease(dto.getSkuId(), dto.getQuantity());
+        // 抛异常 → 整个事务（包括orderMapper.insert）全部回滚
+    }
+}
+
+
+// ==================== REQUIRES_NEW ====================
+// B创建独立事务，B的成败不影响A（适合审计日志等场景）
+
+@Service
+public class OrderService {
+    @Autowired
+    private AuditLogService auditLogService;
+
+    @Transactional(rollbackFor = Exception.class)
+    public void createOrder(OrderDTO dto) {
+        orderMapper.insert(dto);
+
+        try {
+            // 审计日志用独立事务，即使主事务回滚，日志也会保留
+            auditLogService.log("CREATE_ORDER", dto.getId());
+        } catch (Exception e) {
+            // 日志失败不影响主业务
+            log.warn("audit log failed", e);
+        }
+
+        // 后续操作...即使这里抛异常导致A回滚，审计日志已经独立提交了
+        paymentService.charge(dto);
+    }
+}
+
+@Service
+public class AuditLogService {
+    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    public void log(String action, Long bizId) {
+        // 这个方法运行在完全独立的事务中
+        // 即使外层事务回滚，这条日志记录也已经持久化
+        auditLogMapper.insert(action, bizId, LocalDateTime.now());
+    }
+}
+
+
+// ==================== NESTED ====================
+// B使用savepoint，B可以独立回滚而不影响A，但A回滚会连带B
+
+@Service
+public class OrderService {
+    @Autowired
+    private CouponService couponService;
+
+    @Transactional(rollbackFor = Exception.class)
+    public void createOrder(OrderDTO dto) {
+        orderMapper.insert(dto);
+        paymentService.charge(dto);
+
+        // 优惠券核销：失败了不影响订单创建，但订单取消时要一起回滚
+        try {
+            couponService.useCoupon(dto.getCouponId());
+        } catch (Exception e) {
+            // B回滚到savepoint，A继续执行
+            log.warn("coupon use failed, skip", e);
+        }
+
+        // A正常提交：订单创建成功（即使优惠券核销失败）
+        // 如果A回滚：所有操作包括已执行的coupon操作都回滚
+    }
+}
+
+@Service
+public class CouponService {
+    @Transactional(propagation = Propagation.NESTED, rollbackFor = Exception.class)
+    public void useCoupon(Long couponId) {
+        // 在savepoint中执行
+        // 异常时回滚到savepoint，外层事务可以catch后继续
+        couponMapper.markUsed(couponId);
+        // 如果这里抛异常，只回滚couponMapper.markUsed
+        // 外层的orderMapper.insert和paymentService.charge不受影响
+    }
+}</code></pre>
+
+    <h4>REQUIRES_NEW vs NESTED 的关键区别（面试追问点）</h4>
+    <table>
+      <thead>
+        <tr>
+          <th>对比点</th>
+          <th>REQUIRES_NEW</th>
+          <th>NESTED</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>A回滚时B的命运</td>
+          <td>B已独立提交，<strong>不受影响</strong></td>
+          <td>B跟随A一起回滚</td>
+        </tr>
+        <tr>
+          <td>B能否看到A未提交的数据</td>
+          <td>不能（不同Connection，受隔离级别约束）</td>
+          <td>能（同一Connection，同一事务内）</td>
+        </tr>
+        <tr>
+          <td>死锁风险</td>
+          <td>B可能等待A持有的锁 → <strong>死锁</strong></td>
+          <td>同一连接内不会自己跟自己死锁</td>
+        </tr>
+        <tr>
+          <td>连接池压力</td>
+          <td>高（需要额外连接）</td>
+          <td>低（复用同一连接）</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="key-point">
+      <strong>面试回答模板（事务传播行为）：</strong>
+      <p style="margin-top:8px">❶ 先说默认值：Spring事务传播行为默认是<code>REQUIRED</code>，即有事务就加入，没有就新建。</p>
+      <p>❷ 再说面试重点三兄弟的区别：<code>REQUIRED</code>共用事务、<code>REQUIRES_NEW</code>创建独立事务（挂起外层）、<code>NESTED</code>创建savepoint（同一事务内嵌套）。</p>
+      <p>❸ 最后说实际选择策略：<br/>
+      &nbsp;&nbsp;• 大多数场景用默认<code>REQUIRED</code>即可<br/>
+      &nbsp;&nbsp;• 需要"不管外面成败，我都要提交"（如审计日志）→ <code>REQUIRES_NEW</code><br/>
+      &nbsp;&nbsp;• 需要"外面成功我跟着成功，但我失败不拖累外面" → <code>NESTED</code><br/>
+      &nbsp;&nbsp;• <strong>注意</strong>：<code>REQUIRES_NEW</code>有死锁风险（外层持有锁 + 内层新连接等锁），生产中要评估</p>
+    </div>
+
     <h3>坑3：事务传播行为理解错误</h3>
     <pre><code class="sql">// 场景：A方法调用B方法，B方法异常，期望只回滚B不影响A
 
