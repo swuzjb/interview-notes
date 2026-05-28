@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>八股文学习资料</title>
+  <link rel="stylesheet" href="./shared/style.css">
+  <style>
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 2rem; }
+    .index-container { max-width: 720px; width: 100%; }
+    .index-hero { text-align: center; margin-bottom: 3rem; }
+    .index-hero h1 { font-family: var(--font-heading); font-size: clamp(2rem, 5vw, 2.8rem); font-weight: 800; margin-bottom: 0.6rem; color: var(--text-primary); }
+    .index-hero p { color: var(--text-secondary); font-size: 0.95rem; line-height: 1.7; }
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.2rem; }
+    .guide-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.8rem 2rem;
+      text-decoration: none;
+      transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+      display: block;
+    }
+    .guide-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.2);
+      border-color: var(--accent);
+      text-decoration: none;
+    }
+    .card-icon { font-size: 2rem; margin-bottom: 0.8rem; display: block; }
+    .card-title { font-size: 1.15rem; font-weight: 700; color: var(--text-primary); margin-bottom: 0.4rem; }
+    .card-desc { font-size: 0.85rem; color: var(--text-muted); line-height: 1.6; margin-bottom: 0.8rem; }
+    .card-meta { font-size: 0.72rem; color: var(--text-muted); opacity: 0.7; }
+    .card-tags { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.6rem; }
+    .card-tag {
+      font-size: 0.68rem;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: var(--accent-dim);
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .index-footer { text-align: center; margin-top: 3rem; color: var(--text-muted); font-size: 0.78rem; }
+    @media (max-width: 480px) {
+      body { padding: 1.5rem 1rem; }
+      .card-grid { grid-template-columns: 1fr; }
+      .guide-card { padding: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+  <button class="theme-toggle" aria-label="切换主题">&#9788;</button>
+
+  <div class="index-container">
+    <div class="index-hero">
+      <h1>Java 后端八股文</h1>
+      <p>面试高频知识点深度解析，覆盖 Java 核心、MySQL、Redis、消息队列四大领域</p>
+    </div>
+
+    <div class="card-grid">
+      <a href="./java-interview-guide.html" class="guide-card">
+        <span class="card-icon">&#9749;</span>
+        <div class="card-title">Java 核心</div>
+        <div class="card-desc">以 Doug Lea 视角深入 Java 基础、JVM、并发编程、网络 IO 四大模块</div>
+        <div class="card-tags">
+          <span class="card-tag">JVM</span>
+          <span class="card-tag">并发</span>
+          <span class="card-tag">集合</span>
+          <span class="card-tag">IO</span>
+        </div>
+        <div class="card-meta">4 章 · 24 节</div>
+      </a>
+
+      <a href="./mysql-interview-complete.html" class="guide-card">
+        <span class="card-icon">&#128451;</span>
+        <div class="card-title">MySQL 数据库</div>
+        <div class="card-desc">以 InnoDB 内核开发者姜承尧视角，覆盖架构、索引、事务、锁、日志、复制、调优</div>
+        <div class="card-tags">
+          <span class="card-tag">索引</span>
+          <span class="card-tag">事务</span>
+          <span class="card-tag">锁</span>
+          <span class="card-tag">MVCC</span>
+        </div>
+        <div class="card-meta">7 章 · 47 题</div>
+      </a>
+
+      <a href="./cache-redis-interview.html" class="guide-card">
+        <span class="card-icon">&#9889;</span>
+        <div class="card-title">缓存与 Redis</div>
+        <div class="card-desc">以 Redis 之父 antirez 的设计者视角，拆解缓存体系、数据结构、持久化、高可用、分布式锁</div>
+        <div class="card-tags">
+          <span class="card-tag">数据结构</span>
+          <span class="card-tag">持久化</span>
+          <span class="card-tag">集群</span>
+          <span class="card-tag">分布式锁</span>
+        </div>
+        <div class="card-meta">9 章 · 全链路</div>
+      </a>
+
+      <a href="./mq-interview-guide.html" class="guide-card">
+        <span class="card-icon">&#128232;</span>
+        <div class="card-title">消息队列</div>
+        <div class="card-desc">以 Jay Kreps 视角系统拆解 Kafka、RocketMQ、Pulsar 的架构本质与高频考点</div>
+        <div class="card-tags">
+          <span class="card-tag">Kafka</span>
+          <span class="card-tag">RocketMQ</span>
+          <span class="card-tag">Pulsar</span>
+        </div>
+        <div class="card-meta">14 章 · 三大 MQ 对比</div>
+      </a>
+    </div>
+
+    <div class="index-footer">
+      <p>点击卡片进入对应专题 · 支持深浅主题切换 · 移动端友好</p>
+    </div>
+  </div>
+
+  <script src="./shared/script.js"></script>
+</body>
+</html>

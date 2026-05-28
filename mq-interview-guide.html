@@ -1,0 +1,3628 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>消息队列面试圣经 — Kafka / RocketMQ / Pulsar 深度剖析</title>
+  <link rel="stylesheet" href="./shared/style.css">
+</head>
+<body>
+  <div class="reading-progress"></div>
+  <button class="theme-toggle" aria-label="切换主题">&#9788;</button>
+  <button class="mobile-menu-btn" aria-label="菜单">&#9776;</button>
+  <div class="sidebar-overlay"></div>
+
+  <div class="page-wrapper">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">MQ <span class="accent">面试圣经</span></div>
+        <div class="sidebar-subtitle">Kafka · RocketMQ · Pulsar 深度剖析</div>
+      </div>
+      <nav class="sidebar-nav">
+        <div class="nav-group">
+          <a href="#ch1" class="nav-group-title">一、三大MQ总览与定位</a>
+        </div>
+        <div class="nav-group">
+          <a href="#ch2" class="nav-group-title">二、Kafka 核心架构</a>
+        </div>
+        <div class="nav-group">
+          <a href="#ch3" class="nav-group-title">三、RocketMQ 核心架构</a>
+        </div>
+        <div class="nav-group">
+          <a href="#ch4" class="nav-group-title">四、Pulsar 核心架构</a>
+        </div>
+        <div class="nav-group">
+          <a href="#ch5" class="nav-group-title">五、三者架构横向对比</a>
+        </div>
+        <div class="nav-group">
+          <a href="#ch6" class="nav-group-title">六、消息可靠性保证</a>
+        </div>
+        <div class="nav-group">
+          <a href="#ch7" class="nav-group-title">七、消息顺序性</a>
+        </div>
+        <div class="nav-group">
+          <a href="#ch8" class="nav-group-title">八、消息重复与幂等</a>
+        </div>
+        <div class="nav-group">
+          <a href="#ch9" class="nav-group-title">九、事务消息</a>
+        </div>
+        <div class="nav-group">
+          <a href="#ch10" class="nav-group-title">十、延迟消息与死信队列</a>
+        </div>
+        <div class="nav-group">
+          <a href="#ch11" class="nav-group-title">十一、消费模型与重平衡</a>
+        </div>
+        <div class="nav-group">
+          <a href="#ch12" class="nav-group-title">十二、存储引擎设计</a>
+        </div>
+        <div class="nav-group">
+          <a href="#ch13" class="nav-group-title">十三、副本机制与高可用</a>
+        </div>
+        <div class="nav-group">
+          <a href="#ch14" class="nav-group-title">十四、性能对比与选型决策</a>
+        </div>
+      </nav>
+    </aside>
+
+    <main class="main-content">
+      <div class="page-hero">
+        <h1>消息队列面试圣经</h1>
+        <p class="subtitle">以分布式提交日志的设计哲学，系统拆解 Kafka、RocketMQ、Pulsar 的架构本质与面试高频考点</p>
+        <p class="author">— 以 Jay Kreps 视角撰写 · 周志明审校 · 2026</p>
+      </div>
+
+    <!-- ============================================================ -->
+    <!-- 第一章：三大MQ总览与定位 -->
+    <!-- ============================================================ -->
+    <section class="chapter" id="ch1">
+        <div class="chapter-header">
+            <div class="chapter-number">Chapter 01</div>
+            <h2>三大MQ总览与定位</h2>
+        </div>
+
+        <p>
+            在我（Jay Kreps）看来，消息队列的本质就是一个<strong>分布式提交日志（Distributed Commit Log）</strong>。
+            无论是 Kafka、RocketMQ 还是 Pulsar，它们都在回答同一个核心问题：
+            <em>如何在分布式系统中，高效、可靠、有序地传递数据？</em>
+        </p>
+
+        <p>
+            但三者的设计哲学截然不同——就像三位建筑师面对同一块地，
+            一个选择了钢结构（Kafka：极致吞吐），一个选择了钢筋混凝土（RocketMQ：业务功能丰富），
+            一个选择了模块化预制件（Pulsar：存算分离）。
+        </p>
+
+        <h3>一句话定位</h3>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>系统</th>
+                        <th>诞生背景</th>
+                        <th>核心定位</th>
+                        <th>设计哲学</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="tag-kafka">Kafka</span></td>
+                        <td>2011年·LinkedIn</td>
+                        <td>分布式流平台（Streaming Platform）</td>
+                        <td>日志即数据库，一切皆追加写入的有序日志</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tag-rocketmq">RocketMQ</span></td>
+                        <td>2012年·阿里巴巴</td>
+                        <td>金融级业务消息中间件</td>
+                        <td>为电商/金融场景定制，功能优先于极致性能</td>
+                    </tr>
+                    <tr>
+                        <td><span class="tag-pulsar">Pulsar</span></td>
+                        <td>2016年·Yahoo</td>
+                        <td>云原生统一消息流平台</td>
+                        <td>存算分离，Broker无状态，弹性伸缩</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>谁在用？典型场景</h3>
+
+        <h4><span class="tag-kafka">Kafka</span> 典型用户</h4>
+        <ul>
+            <li><strong>日志收集与实时ETL</strong>：Netflix 每天通过 Kafka 传输 PB 级日志数据</li>
+            <li><strong>流式计算</strong>：配合 Flink/Spark Streaming 做实时数据管道</li>
+            <li><strong>事件溯源（Event Sourcing）</strong>：利用日志的不可变特性做数据回放</li>
+            <li><strong>CDC（Change Data Capture）</strong>：Debezium + Kafka 做数据库变更捕获</li>
+        </ul>
+
+        <h4><span class="tag-rocketmq">RocketMQ</span> 典型用户</h4>
+        <ul>
+            <li><strong>电商交易链路</strong>：阿里双11核心交易消息（万亿级消息）</li>
+            <li><strong>金融场景</strong>：需要事务消息、严格顺序消息的业务</li>
+            <li><strong>延迟任务</strong>：订单30分钟未支付自动关闭</li>
+            <li><strong>削峰填谷</strong>：秒杀系统用MQ缓冲瞬时流量</li>
+        </ul>
+
+        <h4><span class="tag-pulsar">Pulsar</span> 典型用户</h4>
+        <ul>
+            <li><strong>多租户SaaS平台</strong>：原生支持命名空间和租户隔离</li>
+            <li><strong>跨地域复制</strong>：内建 Geo-Replication，适合全球化部署</li>
+            <li><strong>既要队列又要流</strong>：统一消息队列 + 流处理（Pulsar Functions）</li>
+            <li><strong>弹性云环境</strong>：Broker 无状态，配合 K8s 极速扩缩容</li>
+        </ul>
+
+        <h3>发展历史时间线</h3>
+
+        <div class="diagram">
+            <svg width="900" height="200" viewBox="0 0 900 200" xmlns="http://www.w3.org/2000/svg">
+                <!-- 时间轴主线 -->
+                <line x1="50" y1="100" x2="850" y2="100" stroke="#334155" stroke-width="2"/>
+                
+                <!-- 年份刻度 -->
+                <g font-size="11" fill="#64748b" text-anchor="middle">
+                    <text x="100" y="130">2011</text>
+                    <text x="220" y="130">2012</text>
+                    <text x="340" y="130">2013</text>
+                    <text x="460" y="130">2016</text>
+                    <text x="580" y="130">2017</text>
+                    <text x="700" y="130">2019</text>
+                    <text x="820" y="130">2022+</text>
+                </g>
+                
+                <!-- Kafka 事件 -->
+                <circle cx="100" cy="100" r="6" fill="#ff6b35"/>
+                <text x="100" y="70" font-size="10" fill="#ff6b35" text-anchor="middle" font-weight="600">Kafka开源</text>
+                <text x="100" y="83" font-size="9" fill="#94a3b8" text-anchor="middle">LinkedIn</text>
+
+                <circle cx="340" cy="100" r="5" fill="#ff6b35"/>
+                <text x="340" y="70" font-size="10" fill="#ff6b35" text-anchor="middle" font-weight="600">Kafka成为</text>
+                <text x="340" y="83" font-size="9" fill="#94a3b8" text-anchor="middle">Apache顶级项目</text>
+
+                <circle cx="820" cy="100" r="5" fill="#ff6b35"/>
+                <text x="820" y="70" font-size="10" fill="#ff6b35" text-anchor="middle" font-weight="600">Kafka 4.0</text>
+                <text x="820" y="83" font-size="9" fill="#94a3b8" text-anchor="middle">2024·移除ZK</text>
+                
+                <!-- RocketMQ 事件 -->
+                <circle cx="220" cy="100" r="6" fill="#06b6d4"/>
+                <text x="220" y="145" font-size="10" fill="#06b6d4" text-anchor="middle" font-weight="600">RocketMQ诞生</text>
+                <text x="220" y="158" font-size="9" fill="#94a3b8" text-anchor="middle">阿里内部</text>
+
+                <circle cx="580" cy="100" r="5" fill="#06b6d4"/>
+                <text x="580" y="145" font-size="10" fill="#06b6d4" text-anchor="middle" font-weight="600">RocketMQ</text>
+                <text x="580" y="158" font-size="9" fill="#94a3b8" text-anchor="middle">Apache顶级项目</text>
+
+                <circle cx="700" cy="100" r="5" fill="#06b6d4"/>
+                <text x="700" y="145" font-size="10" fill="#06b6d4" text-anchor="middle" font-weight="600">RocketMQ 5.0</text>
+                <text x="700" y="158" font-size="9" fill="#94a3b8" text-anchor="middle">2022·云原生架构</text>
+                
+                <!-- Pulsar 事件 -->
+                <circle cx="460" cy="100" r="6" fill="#8b5cf6"/>
+                <text x="460" y="175" font-size="10" fill="#8b5cf6" text-anchor="middle" font-weight="600">Pulsar开源</text>
+                <text x="460" y="188" font-size="9" fill="#94a3b8" text-anchor="middle">Yahoo·2018 Apache顶级</text>
+            </svg>
+            <div class="diagram-caption">图1-1：三大消息队列发展时间线</div>
+        </div>
+
+        <h3>面试破题思路</h3>
+
+        <div class="callout">
+            <div class="callout-title">面试官问："说一下你对消息队列的理解？"</div>
+            <p>
+                <strong>推荐回答框架（30秒版）：</strong><br>
+                消息队列本质上是一个分布式的、持久化的、有序的提交日志。它解决的核心问题是<strong>解耦、异步、削峰</strong>。
+                当前主流的三大系统中——Kafka 以日志为核心抽象，追求极致吞吐，适合数据管道和流计算；
+                RocketMQ 围绕业务消息设计，提供事务消息、延迟消息、消息轨迹等丰富特性，适合电商金融场景；
+                Pulsar 采用存算分离架构，Broker 无状态，天然适合云原生和多租户场景。
+            </p>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">为什么不直接用数据库做消息传递？MQ存在的本质价值是什么？</div>
+            <div class="qa-answer">
+                数据库做消息传递有三个致命问题：①轮询开销大（消费者需要不断 SELECT）；
+                ②竞争锁严重（多消费者抢同一行记录）；③无法水平扩展（单表成瓶颈）。
+                MQ的本质价值是提供了一个<strong>高吞吐、可水平扩展、支持发布订阅语义的有序日志抽象</strong>，
+                使得生产者和消费者在时间维度（异步）和空间维度（解耦）上完全独立。
+                就像高速公路比红绿灯路口高效——不是因为路更好，而是消除了等待和冲突。
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- 第二章：Kafka 核心架构 -->
+    <!-- ============================================================ -->
+    <section class="chapter" id="ch2">
+        <div class="chapter-header">
+            <div class="chapter-number">Chapter 02</div>
+            <h2><span class="kafka">Kafka</span> 核心架构</h2>
+        </div>
+
+        <p>
+            Kafka 的架构可以用一句话概括：<strong>一组 Broker 构成集群，数据按 Topic-Partition 组织，
+            每个 Partition 是一个有序的、不可变的追加日志（Append-only Log）</strong>。
+            这不是"消息队列"——这是一个分布式的日志系统，消息队列只是它的一种使用模式。
+        </p>
+
+        <h3>核心组件</h3>
+
+        <div class="diagram">
+            <svg width="860" height="480" viewBox="0 0 860 480" xmlns="http://www.w3.org/2000/svg">
+                <!-- 背景区域 -->
+                <rect x="250" y="20" width="380" height="60" rx="4" fill="none" stroke="#334155" stroke-dasharray="4"/>
+                <text x="440" y="45" font-size="11" fill="#64748b" text-anchor="middle">Controller (KRaft · Kafka 4.0+唯一模式)</text>
+                <text x="440" y="63" font-size="9" fill="#475569" text-anchor="middle">元数据管理·Leader选举·集群协调</text>
+
+                <!-- Broker 集群 -->
+                <rect x="80" y="110" width="700" height="250" rx="8" fill="none" stroke="#ff6b35" stroke-width="1.5" stroke-dasharray="6"/>
+                <text x="430" y="135" font-size="12" fill="#ff6b35" text-anchor="middle" font-weight="600">Kafka Broker Cluster</text>
+
+                <!-- Broker 1 -->
+                <rect x="110" y="155" width="200" height="180" rx="6" fill="#1a1a2e" stroke="#ff6b35" stroke-width="1"/>
+                <text x="210" y="177" font-size="11" fill="#ff6b35" text-anchor="middle" font-weight="600">Broker 0</text>
+                
+                <!-- Partitions in Broker 1 -->
+                <rect x="125" y="190" width="170" height="32" rx="3" fill="#2d1b0e" stroke="#ff6b35" stroke-width="0.5"/>
+                <text x="210" y="210" font-size="10" fill="#ffaa80" text-anchor="middle">Topic-A Partition-0 (Leader)</text>
+                
+                <rect x="125" y="228" width="170" height="32" rx="3" fill="#1a1a2e" stroke="#475569" stroke-width="0.5"/>
+                <text x="210" y="248" font-size="10" fill="#94a3b8" text-anchor="middle">Topic-A Partition-1 (Follower)</text>
+                
+                <rect x="125" y="266" width="170" height="32" rx="3" fill="#2d1b0e" stroke="#ff6b35" stroke-width="0.5"/>
+                <text x="210" y="286" font-size="10" fill="#ffaa80" text-anchor="middle">Topic-B Partition-0 (Leader)</text>
+
+                <rect x="125" y="304" width="170" height="20" rx="3" fill="none" stroke="#334155" stroke-dasharray="2"/>
+                <text x="210" y="318" font-size="9" fill="#475569" text-anchor="middle">Segment Files (.log/.index)</text>
+
+                <!-- Broker 2 -->
+                <rect x="330" y="155" width="200" height="180" rx="6" fill="#1a1a2e" stroke="#ff6b35" stroke-width="1"/>
+                <text x="430" y="177" font-size="11" fill="#ff6b35" text-anchor="middle" font-weight="600">Broker 1</text>
+                
+                <rect x="345" y="190" width="170" height="32" rx="3" fill="#1a1a2e" stroke="#475569" stroke-width="0.5"/>
+                <text x="430" y="210" font-size="10" fill="#94a3b8" text-anchor="middle">Topic-A Partition-0 (Follower)</text>
+                
+                <rect x="345" y="228" width="170" height="32" rx="3" fill="#2d1b0e" stroke="#ff6b35" stroke-width="0.5"/>
+                <text x="430" y="248" font-size="10" fill="#ffaa80" text-anchor="middle">Topic-A Partition-1 (Leader)</text>
+                
+                <rect x="345" y="266" width="170" height="32" rx="3" fill="#1a1a2e" stroke="#475569" stroke-width="0.5"/>
+                <text x="430" y="286" font-size="10" fill="#94a3b8" text-anchor="middle">Topic-B Partition-0 (Follower)</text>
+
+                <rect x="345" y="304" width="170" height="20" rx="3" fill="none" stroke="#334155" stroke-dasharray="2"/>
+                <text x="430" y="318" font-size="9" fill="#475569" text-anchor="middle">Segment Files (.log/.index)</text>
+
+                <!-- Broker 3 -->
+                <rect x="550" y="155" width="200" height="180" rx="6" fill="#1a1a2e" stroke="#ff6b35" stroke-width="1"/>
+                <text x="650" y="177" font-size="11" fill="#ff6b35" text-anchor="middle" font-weight="600">Broker 2</text>
+                
+                <rect x="565" y="190" width="170" height="32" rx="3" fill="#1a1a2e" stroke="#475569" stroke-width="0.5"/>
+                <text x="650" y="210" font-size="10" fill="#94a3b8" text-anchor="middle">Topic-A Partition-0 (Follower)</text>
+
+                <rect x="565" y="228" width="170" height="32" rx="3" fill="#1a1a2e" stroke="#475569" stroke-width="0.5"/>
+                <text x="650" y="248" font-size="10" fill="#94a3b8" text-anchor="middle">Topic-A Partition-1 (Follower)</text>
+
+                <rect x="565" y="266" width="170" height="32" rx="3" fill="#2d1b0e" stroke="#ff6b35" stroke-width="0.5"/>
+                <text x="650" y="286" font-size="10" fill="#ffaa80" text-anchor="middle">Topic-B Partition-1 (Leader)</text>
+
+                <rect x="565" y="304" width="170" height="20" rx="3" fill="none" stroke="#334155" stroke-dasharray="2"/>
+                <text x="650" y="318" font-size="9" fill="#475569" text-anchor="middle">Segment Files (.log/.index)</text>
+
+                <!-- Producer -->
+                <rect x="30" y="400" width="140" height="50" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5"/>
+                <text x="100" y="420" font-size="10" fill="#f59e0b" text-anchor="middle" font-weight="600">Producer</text>
+                <text x="100" y="437" font-size="9" fill="#94a3b8" text-anchor="middle">分区策略·批量发送</text>
+
+                <!-- Consumer Group -->
+                <rect x="580" y="390" width="250" height="70" rx="6" fill="#1e293b" stroke="#10b981" stroke-width="1.5"/>
+                <text x="705" y="412" font-size="10" fill="#10b981" text-anchor="middle" font-weight="600">Consumer Group</text>
+                <text x="640" y="435" font-size="9" fill="#94a3b8" text-anchor="middle">Consumer-0</text>
+                <text x="720" y="435" font-size="9" fill="#94a3b8" text-anchor="middle">Consumer-1</text>
+                <text x="795" y="435" font-size="9" fill="#94a3b8" text-anchor="middle">Consumer-2</text>
+                <text x="705" y="452" font-size="8" fill="#475569" text-anchor="middle">每个Partition只被组内一个Consumer消费</text>
+
+                <!-- 箭头: Producer → Brokers -->
+                <line x1="170" y1="415" x2="250" y2="320" stroke="#f59e0b" stroke-width="1.2" marker-end="url(#arrow-gold)"/>
+                <line x1="170" y1="420" x2="380" y2="320" stroke="#f59e0b" stroke-width="1.2" marker-end="url(#arrow-gold)"/>
+
+                <!-- 箭头: Brokers → Consumer -->
+                <line x1="530" y1="330" x2="610" y2="390" stroke="#10b981" stroke-width="1.2" marker-end="url(#arrow-green)"/>
+                <line x1="640" y1="340" x2="680" y2="390" stroke="#10b981" stroke-width="1.2" marker-end="url(#arrow-green)"/>
+
+                <!-- 箭头定义 -->
+                <defs>
+                    <marker id="arrow-gold" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#f59e0b"/>
+                    </marker>
+                    <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#10b981"/>
+                    </marker>
+                </defs>
+            </svg>
+            <div class="diagram-caption">图2-1：Kafka 架构全景图 — Broker集群 + Partition分布 + 生产消费关系</div>
+        </div>
+
+        <h3>核心概念详解</h3>
+
+        <h4>1. Topic & Partition</h4>
+        <p>
+            <strong>Topic</strong> 是逻辑概念，是消息的分类名称。
+            <strong>Partition</strong> 是物理概念，是 Topic 的水平分片，也是 Kafka 中<strong>最小的并行单位</strong>——
+            不是 Topic，不是 Broker，而是 Partition。
+            每个 Partition 本质上是磁盘上的一个<strong>有序的、不可变的消息序列</strong>，
+            新消息只能追加到末尾（append-only），这正是 Kafka 高吞吐的根基。
+            一个 Partition 在同一时刻只能被 Consumer Group 内的一个 Consumer 消费，
+            因此 Partition 数量直接决定了消费侧的最大并行度。
+        </p>
+        <p>
+            <strong>关键设计决策：</strong>一旦 Partition 数量确定后扩容代价很大（需要数据迁移且会打破 Key 路由的稳定性），
+            因此建议建 Topic 时预估好 Partition 数。一般规则：Partition 数 = 预期吞吐量 / 单 Partition 写入能力。
+            生产环境中单 Broker 建议不超过 4000 个 Partition（Kafka 官方建议），超过后 Controller 选举和恢复时间显著增长。
+        </p>
+
+        <h4>2. Offset（偏移量）</h4>
+        <p>
+            每条消息在 Partition 内有唯一的<strong>单调递增的 offset</strong>。
+            这是 Kafka 最优雅的设计之一——消费进度不由服务端维护，而是由消费者自己记住"我读到哪了"。
+            这使得：①消费者可以重复消费（回溯 offset）；②Broker 无需维护消费状态，极大简化了服务端。
+        </p>
+
+        <h4>3. Consumer Group</h4>
+        <p>
+            同一个 Consumer Group 内的消费者<strong>瓜分</strong> Topic 的所有 Partition，
+            每个 Partition 只会被组内一个消费者消费。这实现了负载均衡。
+            不同 Consumer Group 之间是<strong>广播</strong>关系，各自独立消费全量数据。
+        </p>
+
+        <div class="callout">
+            <div class="callout-title">面试关键点</div>
+            <p>Consumer 数量 > Partition 数量时，多余的 Consumer 会闲置（idle）。
+            所以 Kafka 的消费并行度上限 = Partition 数量。
+            这是 Kafka 设计中"Partition 是最小并行单位"的直接体现——
+            一个 Partition 不能被同一 Group 内的两个 Consumer 同时消费（否则无法保证 Partition 内有序）。
+            设计 Topic 时务必考虑未来的消费者扩展需求。</p>
+        </div>
+
+        <h4>4. ISR（In-Sync Replicas）</h4>
+        <p>
+            ISR 是与 Leader 保持同步的副本集合。当 Follower 落后超过 <code>replica.lag.time.max.ms</code>（默认30s）
+            时会被踢出 ISR。只有 ISR 中的副本才有资格成为新 Leader。
+            这是 Kafka 在<strong>一致性与可用性之间的精妙平衡</strong>——它不使用固定的多数派投票（如 Raft 需要 N/2+1），
+            而是维护一个动态的"保持同步的副本集合"。ISR 可能缩小到只有 Leader 本身，
+            此时若 Leader 也挂了且 <code>unclean.leader.election.enable=false</code>，分区将不可用（选择一致性而非可用性）。
+        </p>
+        <p>
+            <strong>历史演进：</strong>Kafka 0.9.0 之前还有一个参数 <code>replica.lag.max.messages</code>（按消息条数判断落后），
+            但该参数在流量波动时极易导致 ISR 频繁抖动（一次大批量写入就可能让所有 Follower 瞬间超过阈值被踢出），
+            因此在 0.9.0 版本中被彻底移除，只保留基于时间的 <code>replica.lag.time.max.ms</code> 判定。
+            面试中如果被问到"为什么不按消息条数判断"，这就是原因。
+        </p>
+
+        <h4>5. Segment（段文件）</h4>
+        <p>
+            每个 Partition 在磁盘上被切分为多个 Segment 文件，每个 Segment 包含：
+        </p>
+        <ul>
+            <li><code>.log</code> 文件：实际的消息数据（顺序写入）</li>
+            <li><code>.index</code> 文件：稀疏索引（offset → 物理位置映射）</li>
+            <li><code>.timeindex</code> 文件：时间戳索引（timestamp → offset 映射）</li>
+        </ul>
+        <p>
+            Segment 按大小或时间滚动切分（默认1GB或7天），旧 Segment 可被删除或压缩（Log Compaction）。
+        </p>
+
+        <h3>Kafka 数据写入流程</h3>
+
+        <div class="diagram">
+            <svg width="800" height="280" viewBox="0 0 800 280" xmlns="http://www.w3.org/2000/svg">
+                <!-- Step boxes -->
+                <rect x="20" y="30" width="130" height="55" rx="4" fill="#2d1b0e" stroke="#ff6b35" stroke-width="1"/>
+                <text x="85" y="52" font-size="9" fill="#ff6b35" text-anchor="middle" font-weight="600">① Producer</text>
+                <text x="85" y="67" font-size="8" fill="#94a3b8" text-anchor="middle">选择Partition</text>
+                <text x="85" y="79" font-size="8" fill="#94a3b8" text-anchor="middle">(轮询/Key哈希/自定义)</text>
+
+                <rect x="180" y="30" width="130" height="55" rx="4" fill="#2d1b0e" stroke="#ff6b35" stroke-width="1"/>
+                <text x="245" y="52" font-size="9" fill="#ff6b35" text-anchor="middle" font-weight="600">② 批量缓冲</text>
+                <text x="245" y="67" font-size="8" fill="#94a3b8" text-anchor="middle">RecordAccumulator</text>
+                <text x="245" y="79" font-size="8" fill="#94a3b8" text-anchor="middle">按batch.size聚合</text>
+
+                <rect x="340" y="30" width="130" height="55" rx="4" fill="#2d1b0e" stroke="#ff6b35" stroke-width="1"/>
+                <text x="405" y="52" font-size="9" fill="#ff6b35" text-anchor="middle" font-weight="600">③ Sender线程</text>
+                <text x="405" y="67" font-size="8" fill="#94a3b8" text-anchor="middle">网络发送到Leader</text>
+                <text x="405" y="79" font-size="8" fill="#94a3b8" text-anchor="middle">Broker</text>
+
+                <rect x="500" y="30" width="130" height="55" rx="4" fill="#2d1b0e" stroke="#ff6b35" stroke-width="1"/>
+                <text x="565" y="52" font-size="9" fill="#ff6b35" text-anchor="middle" font-weight="600">④ Leader写入</text>
+                <text x="565" y="67" font-size="8" fill="#94a3b8" text-anchor="middle">追加到Log Segment</text>
+                <text x="565" y="79" font-size="8" fill="#94a3b8" text-anchor="middle">PageCache写入</text>
+
+                <rect x="660" y="30" width="120" height="55" rx="4" fill="#2d1b0e" stroke="#ff6b35" stroke-width="1"/>
+                <text x="720" y="52" font-size="9" fill="#ff6b35" text-anchor="middle" font-weight="600">⑤ ISR同步</text>
+                <text x="720" y="67" font-size="8" fill="#94a3b8" text-anchor="middle">Follower拉取复制</text>
+                <text x="720" y="79" font-size="8" fill="#94a3b8" text-anchor="middle">更新HW</text>
+
+                <!-- Arrows -->
+                <line x1="150" y1="57" x2="180" y2="57" stroke="#ff6b35" stroke-width="1" marker-end="url(#arr-k)"/>
+                <line x1="310" y1="57" x2="340" y2="57" stroke="#ff6b35" stroke-width="1" marker-end="url(#arr-k)"/>
+                <line x1="470" y1="57" x2="500" y2="57" stroke="#ff6b35" stroke-width="1" marker-end="url(#arr-k)"/>
+                <line x1="630" y1="57" x2="660" y2="57" stroke="#ff6b35" stroke-width="1" marker-end="url(#arr-k)"/>
+
+                <defs>
+                    <marker id="arr-k" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                        <polygon points="0 0, 6 2.5, 0 5" fill="#ff6b35"/>
+                    </marker>
+                </defs>
+
+                <!-- ACK 说明 -->
+                <rect x="20" y="120" width="760" height="140" rx="6" fill="#111827" stroke="#334155" stroke-width="1"/>
+                <text x="40" y="145" font-size="11" fill="#ff6b35" font-weight="600">acks 参数决定可靠性级别：</text>
+                
+                <text x="40" y="172" font-size="10" fill="#f59e0b" font-weight="600">acks=0</text>
+                <text x="100" y="172" font-size="10" fill="#94a3b8">发出即忘，不等任何确认。最快，但可能丢消息。</text>
+                
+                <text x="40" y="197" font-size="10" fill="#f59e0b" font-weight="600">acks=1</text>
+                <text x="100" y="197" font-size="10" fill="#94a3b8">Leader写入本地日志即返回。Leader宕机可能丢数据。</text>
+                
+                <text x="40" y="222" font-size="10" fill="#f59e0b" font-weight="600">acks=all(-1)</text>
+                <text x="130" y="222" font-size="10" fill="#94a3b8">等待ISR中所有副本确认。最安全，配合min.insync.replicas使用。</text>
+                
+                <text x="40" y="250" font-size="9" fill="#475569">生产环境推荐: acks=all + min.insync.replicas=2 + replication.factor=3 → 容忍1台Broker宕机不丢数据</text>
+            </svg>
+            <div class="diagram-caption">图2-2：Kafka 消息写入完整流程与 acks 语义</div>
+        </div>
+
+        <h3>关键配置速查（面试常问）</h3>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>配置项</th>
+                        <th>默认值</th>
+                        <th>含义</th>
+                        <th>面试关联</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>acks</code></td>
+                        <td>1 (Kafka 3.0+默认改为all)</td>
+                        <td>生产者确认级别</td>
+                        <td>消息可靠性</td>
+                    </tr>
+                    <tr>
+                        <td><code>min.insync.replicas</code></td>
+                        <td>1</td>
+                        <td>ISR最小副本数</td>
+                        <td>高可用 vs 一致性</td>
+                    </tr>
+                    <tr>
+                        <td><code>replication.factor</code></td>
+                        <td>3 (4.0+默认3, 旧版1)</td>
+                        <td>副本因子</td>
+                        <td>数据冗余度</td>
+                    </tr>
+                    <tr>
+                        <td><code>batch.size</code></td>
+                        <td>16KB</td>
+                        <td>批次大小</td>
+                        <td>吞吐 vs 延迟</td>
+                    </tr>
+                    <tr>
+                        <td><code>linger.ms</code></td>
+                        <td>0</td>
+                        <td>发送等待时间</td>
+                        <td>配合batch.size调优</td>
+                    </tr>
+                    <tr>
+                        <td><code>max.poll.records</code></td>
+                        <td>500</td>
+                        <td>单次拉取最大条数</td>
+                        <td>消费者调优</td>
+                    </tr>
+                    <tr>
+                        <td><code>enable.auto.commit</code></td>
+                        <td>true</td>
+                        <td>自动提交offset</td>
+                        <td>重复消费问题</td>
+                    </tr>
+                    <tr>
+                        <td><code>unclean.leader.election.enable</code></td>
+                        <td>false (0.11.0+默认false, 之前默认true)</td>
+                        <td>允许非ISR副本当选Leader</td>
+                        <td>一致性 vs 可用性</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>代码示例：Producer 高可靠配置</h3>
+
+        <pre data-lang="Java"><code>Properties props = new Properties();
+props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "broker1:9092,broker2:9092,broker3:9092");
+props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+
+// === 可靠性三板斧 ===
+props.put(ProducerConfig.ACKS_CONFIG, "all");              // 等待ISR全部确认
+props.put(ProducerConfig.RETRIES_CONFIG, Integer.MAX_VALUE); // 无限重试
+props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5); // 配合幂等性
+
+// === 幂等性（Kafka 0.11+）===
+props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true); // 开启幂等，自动去重
+// 幂等原理: Broker为每个Producer分配PID, 每个<PID,Partition>维护单调递增的Sequence Number
+// 重复的Sequence直接丢弃(DuplicateSequenceException), 乱序则拒绝(OutOfOrderSequenceException)
+// 注意: Kafka 3.0+ 默认开启幂等(enable.idempotence默认true, acks默认all)
+
+// === 吞吐优化 ===
+props.put(ProducerConfig.BATCH_SIZE_CONFIG, 32 * 1024);    // 32KB批次
+props.put(ProducerConfig.LINGER_MS_CONFIG, 20);            // 等待20ms凑批
+props.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "lz4");  // LZ4压缩
+
+KafkaProducer&lt;String, String&gt; producer = new KafkaProducer&lt;&gt;(props);
+
+// 异步发送 + 回调
+producer.send(new ProducerRecord&lt;&gt;("order-events", orderId, orderJson), (metadata, ex) -> {
+    if (ex != null) {
+        // 注意: 发送异常时metadata可能为null，不要直接访问其字段
+        log.error("发送失败, key={}", orderId, ex);
+        // 告警 + 持久化到本地DB做补偿
+    } else {
+        log.info("发送成功, topic={}, partition={}, offset={}", 
+                 metadata.topic(), metadata.partition(), metadata.offset());
+    }
+});</code></pre>
+
+        <div class="qa-block">
+            <div class="qa-question">Kafka 为什么吞吐量这么高？</div>
+            <div class="qa-answer">
+                四大核心原因：①<strong>顺序写磁盘</strong>——Partition 日志只追加写，顺序IO比随机IO快3个数量级；
+                ②<strong>Page Cache</strong>——利用操作系统的页缓存，热数据直接在内存中，避免JVM GC；
+                ③<strong>零拷贝（Zero-Copy）</strong>——消费路径通过 <code>java.nio.channels.FileChannel.transferTo()</code>
+                调用底层 <code>sendfile()</code> 系统调用，数据不经过用户态，省去两次上下文切换。
+                传统路径：磁盘→Page Cache→用户态Buffer→Socket Buffer→网卡（4次拷贝、4次上下文切换），
+                sendfile()路径：磁盘→Page Cache→Socket Buffer→网卡（3次拷贝：2次DMA+1次CPU拷贝、2次上下文切换）。
+                注意：sendfile() 仍需将数据从 Page Cache 拷贝到 Socket Buffer（1次CPU拷贝），
+                只有在网卡支持 scatter-gather DMA 时才能跳过这一步实现真正的0次CPU拷贝；
+                ④<strong>批量 + 压缩</strong>——Producer端批量凑包发送（RecordBatch），减少网络RTT和系统调用次数，
+                加上LZ4/Snappy/Zstd压缩减少网络带宽占用。整个 batch 作为一个整体压缩、传输、存储，
+                Consumer 端解压，Broker 端无需解压再压缩（pass-through），这是 Kafka 独有的"端到端压缩"设计。
+            </div>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">ZooKeeper 在 Kafka 中扮演什么角色？为什么要去掉它（KRaft）？</div>
+            <div class="qa-answer">
+                ZooKeeper 在旧版 Kafka 中负责：①Broker 注册与发现；②Controller 选举；③Topic/Partition 元数据存储；
+                ④Consumer Group offset 存储（0.9之前）。<br><br>
+                去掉的原因：①ZK成为扩展瓶颈（元数据写入串行化）；②运维复杂度（需要额外维护ZK集群）；
+                ③Controller 切换时需要从ZK全量加载元数据，大集群恢复时间长（分钟级）。<br><br>
+                KRaft 模式演进：Kafka 3.3（2022）标记 KRaft 为 GA；
+                <strong>Kafka 4.0（2024年3月）完全移除了 ZooKeeper 代码</strong>，KRaft 成为唯一的元数据管理方式。
+                KRaft 的核心设计：选出一组 Controller 节点（通常3或5个）组成 Quorum，
+                使用 Raft 协议管理集群元数据日志（__cluster_metadata topic）。
+                Active Controller 负责写入，其他 Controller 作为热备（Standby）从 Raft 日志复制状态。
+                Controller 切换恢复秒级完成（无需全量加载元数据，因为状态在 Raft 日志中已持久化）。
+                到2026年，所有新部署的 Kafka 集群都应该且只能使用 KRaft 模式。
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- 第三章：RocketMQ 核心架构 -->
+    <!-- ============================================================ -->
+    <section class="chapter" id="ch3">
+        <div class="chapter-header">
+            <div class="chapter-number">Chapter 03</div>
+            <h2><span class="rocketmq">RocketMQ</span> 核心架构</h2>
+        </div>
+
+        <p>
+            如果说 Kafka 是"日志优先"的设计，RocketMQ 则是<strong>"业务优先"</strong>的设计。
+            它诞生于阿里双11的战火中，从第一天起就需要支撑事务消息、延迟消息、消息过滤、消息轨迹追踪这些复杂的业务功能。
+            在我（Jay Kreps）看来，RocketMQ 的独特之处在于：<strong>它在存储层做了一个大胆的取舍——所有 Topic 的消息混写到同一个 CommitLog</strong>，
+            然后通过 ConsumeQueue 做逻辑分发。这个设计让它在多 Topic 场景下表现优异。
+        </p>
+
+        <h3>架构全景图</h3>
+
+        <div class="diagram">
+            <svg width="860" height="500" viewBox="0 0 860 500" xmlns="http://www.w3.org/2000/svg">
+                <!-- NameServer 集群 -->
+                <rect x="270" y="15" width="320" height="65" rx="6" fill="none" stroke="#06b6d4" stroke-width="1.5" stroke-dasharray="5"/>
+                <text x="430" y="38" font-size="11" fill="#06b6d4" text-anchor="middle" font-weight="600">NameServer Cluster (无状态，互不通信)</text>
+                <rect x="295" y="48" width="70" height="25" rx="3" fill="#0a2a30" stroke="#06b6d4" stroke-width="0.8"/>
+                <text x="330" y="65" font-size="9" fill="#67e8f9" text-anchor="middle">NS-1</text>
+                <rect x="385" y="48" width="70" height="25" rx="3" fill="#0a2a30" stroke="#06b6d4" stroke-width="0.8"/>
+                <text x="420" y="65" font-size="9" fill="#67e8f9" text-anchor="middle">NS-2</text>
+                <rect x="475" y="48" width="70" height="25" rx="3" fill="#0a2a30" stroke="#06b6d4" stroke-width="0.8"/>
+                <text x="510" y="65" font-size="9" fill="#67e8f9" text-anchor="middle">NS-3</text>
+
+                <!-- Broker Master-Slave 组 -->
+                <rect x="50" y="120" width="380" height="250" rx="8" fill="none" stroke="#06b6d4" stroke-width="1.2"/>
+                <text x="240" y="145" font-size="11" fill="#06b6d4" text-anchor="middle" font-weight="600">Broker Group A</text>
+
+                <!-- Master -->
+                <rect x="70" y="160" width="170" height="190" rx="5" fill="#0a1f2e" stroke="#06b6d4" stroke-width="1"/>
+                <text x="155" y="182" font-size="10" fill="#06b6d4" text-anchor="middle" font-weight="600">Master (brokerId=0)</text>
+                
+                <rect x="82" y="195" width="146" height="28" rx="3" fill="#0d2935" stroke="#0891b2" stroke-width="0.5"/>
+                <text x="155" y="213" font-size="9" fill="#67e8f9" text-anchor="middle">CommitLog (混合写入)</text>
+
+                <rect x="82" y="228" width="70" height="22" rx="2" fill="#0d2935" stroke="#475569" stroke-width="0.5"/>
+                <text x="117" y="243" font-size="8" fill="#94a3b8" text-anchor="middle">ConsumeQueue</text>
+                <rect x="158" y="228" width="70" height="22" rx="2" fill="#0d2935" stroke="#475569" stroke-width="0.5"/>
+                <text x="193" y="243" font-size="8" fill="#94a3b8" text-anchor="middle">IndexFile</text>
+
+                <rect x="82" y="258" width="146" height="22" rx="2" fill="#0d2935" stroke="#475569" stroke-width="0.5"/>
+                <text x="155" y="273" font-size="8" fill="#94a3b8" text-anchor="middle">TransactionState / DelayLevel</text>
+
+                <rect x="82" y="288" width="146" height="50" rx="2" fill="none" stroke="#334155" stroke-dasharray="2"/>
+                <text x="155" y="307" font-size="8" fill="#475569" text-anchor="middle">存储目录结构:</text>
+                <text x="155" y="320" font-size="7" fill="#475569" text-anchor="middle" font-family="monospace">store/commitlog/00000000000</text>
+                <text x="155" y="332" font-size="7" fill="#475569" text-anchor="middle" font-family="monospace">store/consumequeue/topicA/0/</text>
+
+                <!-- Slave -->
+                <rect x="260" y="160" width="150" height="190" rx="5" fill="#0a1f2e" stroke="#475569" stroke-width="1"/>
+                <text x="335" y="182" font-size="10" fill="#94a3b8" text-anchor="middle" font-weight="600">Slave (brokerId=1)</text>
+                <text x="335" y="210" font-size="9" fill="#64748b" text-anchor="middle">同步/异步复制</text>
+                <text x="335" y="228" font-size="9" fill="#64748b" text-anchor="middle">CommitLog的</text>
+                <text x="335" y="246" font-size="9" fill="#64748b" text-anchor="middle">完整副本</text>
+                
+                <text x="335" y="290" font-size="8" fill="#475569" text-anchor="middle">可配置为:</text>
+                <text x="335" y="306" font-size="8" fill="#67e8f9" text-anchor="middle">SYNC_MASTER</text>
+                <text x="335" y="322" font-size="8" fill="#94a3b8" text-anchor="middle">ASYNC_MASTER</text>
+
+                <!-- 复制箭头 -->
+                <line x1="240" y1="250" x2="260" y2="250" stroke="#06b6d4" stroke-width="1" stroke-dasharray="3" marker-end="url(#arr-rmq)"/>
+
+                <!-- Broker Group B -->
+                <rect x="460" y="120" width="380" height="250" rx="8" fill="none" stroke="#06b6d4" stroke-width="1.2"/>
+                <text x="650" y="145" font-size="11" fill="#06b6d4" text-anchor="middle" font-weight="600">Broker Group B</text>
+
+                <rect x="480" y="160" width="170" height="120" rx="5" fill="#0a1f2e" stroke="#06b6d4" stroke-width="1"/>
+                <text x="565" y="182" font-size="10" fill="#06b6d4" text-anchor="middle" font-weight="600">Master (brokerId=0)</text>
+                <rect x="492" y="195" width="146" height="28" rx="3" fill="#0d2935" stroke="#0891b2" stroke-width="0.5"/>
+                <text x="565" y="213" font-size="9" fill="#67e8f9" text-anchor="middle">CommitLog (混合写入)</text>
+                <rect x="492" y="228" width="70" height="22" rx="2" fill="#0d2935" stroke="#475569" stroke-width="0.5"/>
+                <text x="527" y="243" font-size="8" fill="#94a3b8" text-anchor="middle">ConsumeQueue</text>
+                <rect x="568" y="228" width="70" height="22" rx="2" fill="#0d2935" stroke="#475569" stroke-width="0.5"/>
+                <text x="603" y="243" font-size="8" fill="#94a3b8" text-anchor="middle">IndexFile</text>
+
+                <rect x="670" y="160" width="150" height="120" rx="5" fill="#0a1f2e" stroke="#475569" stroke-width="1"/>
+                <text x="745" y="182" font-size="10" fill="#94a3b8" text-anchor="middle" font-weight="600">Slave (brokerId=1)</text>
+                <text x="745" y="220" font-size="9" fill="#64748b" text-anchor="middle">数据副本</text>
+
+                <line x1="650" y1="230" x2="670" y2="230" stroke="#06b6d4" stroke-width="1" stroke-dasharray="3" marker-end="url(#arr-rmq)"/>
+
+                <!-- Producer -->
+                <rect x="50" y="410" width="170" height="55" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5"/>
+                <text x="135" y="432" font-size="10" fill="#f59e0b" text-anchor="middle" font-weight="600">Producer Group</text>
+                <text x="135" y="450" font-size="8" fill="#94a3b8" text-anchor="middle">轮询选择MessageQueue</text>
+                <text x="135" y="462" font-size="8" fill="#94a3b8" text-anchor="middle">故障延迟机制(Latency Fault)</text>
+
+                <!-- Consumer -->
+                <rect x="580" y="410" width="250" height="55" rx="6" fill="#1e293b" stroke="#10b981" stroke-width="1.5"/>
+                <text x="705" y="432" font-size="10" fill="#10b981" text-anchor="middle" font-weight="600">Consumer Group</text>
+                <text x="705" y="450" font-size="8" fill="#94a3b8" text-anchor="middle">集群模式(负载均衡) / 广播模式(全量消费)</text>
+                <text x="705" y="462" font-size="8" fill="#94a3b8" text-anchor="middle">Pull模式 + 长轮询(Long Polling)</text>
+
+                <!-- 连接线 -->
+                <line x1="135" y1="410" x2="155" y2="370" stroke="#f59e0b" stroke-width="1" marker-end="url(#arr-rmq)"/>
+                <line x1="650" y1="370" x2="680" y2="410" stroke="#10b981" stroke-width="1" marker-end="url(#arr-rmq2)"/>
+
+                <!-- NameServer 连接 -->
+                <line x1="135" y1="410" x2="340" y2="80" stroke="#334155" stroke-width="0.8" stroke-dasharray="3"/>
+                <line x1="705" y1="410" x2="500" y2="80" stroke="#334155" stroke-width="0.8" stroke-dasharray="3"/>
+                <line x1="240" y1="120" x2="380" y2="80" stroke="#334155" stroke-width="0.8" stroke-dasharray="3"/>
+                <line x1="650" y1="120" x2="480" y2="80" stroke="#334155" stroke-width="0.8" stroke-dasharray="3"/>
+
+                <defs>
+                    <marker id="arr-rmq" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                        <polygon points="0 0, 6 2.5, 0 5" fill="#06b6d4"/>
+                    </marker>
+                    <marker id="arr-rmq2" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                        <polygon points="0 0, 6 2.5, 0 5" fill="#10b981"/>
+                    </marker>
+                </defs>
+            </svg>
+            <div class="diagram-caption">图3-1：RocketMQ 架构全景图 — NameServer + Broker主从组 + 生产消费关系</div>
+        </div>
+
+        <h3>核心概念详解</h3>
+
+        <h4>1. NameServer vs ZooKeeper</h4>
+        <p>
+            RocketMQ 没有使用 ZooKeeper，而是自研了极简的 <strong>NameServer</strong>。
+            每个 NameServer 节点<strong>互不通信</strong>，各自维护一份完整的路由信息。
+            Broker 启动时向所有 NameServer 注册，之后每30秒发送心跳。
+            Producer/Consumer 随机连接一个 NameServer 获取路由表。
+        </p>
+        <p>
+            <strong>为什么不用ZK？</strong>阿里认为 ZooKeeper 太重了。NameServer 的设计哲学是：
+            ①无状态，水平扩展无上限；②最终一致性而非强一致性（AP优先）；
+            ③代码极简（整个 NameServer 只有几千行代码），运维无负担。
+        </p>
+
+        <h4>2. CommitLog 混合存储</h4>
+        <p>
+            这是 RocketMQ 与 Kafka 最大的存储差异。Kafka 每个 Partition 独立一套日志文件，
+            而 RocketMQ <strong>所有 Topic 的所有消息混写到同一个 CommitLog</strong>（单个文件默认1GB）。
+        </p>
+        <div class="callout">
+            <div class="callout-title">混合写入的优势与劣势</div>
+            <p><strong>优势：</strong>无论有多少 Topic/Queue，磁盘始终是纯粹的顺序写入（单一文件追加）。
+            Topic 数量从100增加到10000，写入性能几乎不变。Kafka 如果有上万 Partition，大量随机写会严重劣化。</p>
+            <p><strong>劣势：</strong>读取时不再是顺序读——需要先查 ConsumeQueue 索引定位消息在 CommitLog 中的偏移，
+            再跳到 CommitLog 中读取实际消息（一次随机读）。消费是"先索引后读取"的两步操作。</p>
+        </div>
+
+        <h4>3. ConsumeQueue（消费队列）</h4>
+        <p>
+            ConsumeQueue 是按 Topic + QueueId 组织的索引文件，每条记录固定 <strong>20字节</strong>：
+        </p>
+        <ul>
+            <li>8字节：CommitLog 物理偏移量（offset）</li>
+            <li>4字节：消息体大小（size）</li>
+            <li>8字节：Tag的hashcode（用于消息过滤）</li>
+        </ul>
+        <p>
+            它就像一本书的目录——你不需要翻遍整本书（CommitLog），只需查目录（ConsumeQueue）就能定位到具体页码。
+        </p>
+
+        <h4>4. MessageQueue（消息队列）</h4>
+        <p>
+            MessageQueue 对应 Kafka 的 Partition 概念。一个 Topic 有多个 MessageQueue，
+            分布在不同的 Broker 上。Producer 发消息时按轮询或指定策略选择 MessageQueue。
+        </p>
+
+        <h4>5. Broker 主从模式</h4>
+        <p>
+            RocketMQ 4.x 早期使用传统的 <strong>Master-Slave</strong> 架构（brokerId=0为Master，>0为Slave）。
+            从 <strong>4.5 版本（2019年）</strong>开始引入基于 <strong>Raft（DLedger）</strong>的自动主从切换。
+            <strong>5.x（2022+）进一步推出 Controller 模式</strong>——将选举逻辑从 Broker 中剥离到独立的 Controller 组件，
+            Broker 自身不再运行 Raft，由外部 Controller（可复用 NameServer 进程）负责 Leader 选举。
+            截至2026年，Controller 模式是 RocketMQ 新集群推荐的高可用方案。
+        </p>
+        <p>
+            <strong>RocketMQ 5.0 的架构革新不止于此：</strong>5.0 引入了 <strong>Proxy 层</strong>作为客户端的接入点，
+            Broker 不再直接面向客户端。Proxy 层对外暴露 <strong>gRPC 协议</strong>（取代 4.x 的自定义 Remoting 协议），
+            支持多语言 SDK 统一接入。架构变为：Client → Proxy（gRPC）→ Broker（内部通信）→ Storage。
+            Proxy 可以与 Broker 合并部署（Local 模式，适合小规模）或独立部署（Cluster 模式，适合大规模弹性）。
+            这一设计使 RocketMQ 5.0 在云原生场景下更灵活——Proxy 层无状态，可独立扩缩容。
+        </p>
+
+        <h3>RocketMQ 消息存储流程</h3>
+
+        <div class="diagram">
+            <svg width="800" height="200" viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg">
+                <rect x="20" y="40" width="120" height="50" rx="4" fill="#0d2935" stroke="#06b6d4" stroke-width="1"/>
+                <text x="80" y="60" font-size="9" fill="#06b6d4" text-anchor="middle" font-weight="600">① 消息到达</text>
+                <text x="80" y="76" font-size="8" fill="#94a3b8" text-anchor="middle">Broker接收</text>
+                <text x="80" y="88" font-size="8" fill="#94a3b8" text-anchor="middle">加锁(putMessage)</text>
+
+                <rect x="165" y="40" width="120" height="50" rx="4" fill="#0d2935" stroke="#06b6d4" stroke-width="1"/>
+                <text x="225" y="60" font-size="9" fill="#06b6d4" text-anchor="middle" font-weight="600">② 写CommitLog</text>
+                <text x="225" y="76" font-size="8" fill="#94a3b8" text-anchor="middle">顺序追加写入</text>
+                <text x="225" y="88" font-size="8" fill="#94a3b8" text-anchor="middle">MappedFile(mmap)</text>
+
+                <rect x="310" y="40" width="120" height="50" rx="4" fill="#0d2935" stroke="#06b6d4" stroke-width="1"/>
+                <text x="370" y="60" font-size="9" fill="#06b6d4" text-anchor="middle" font-weight="600">③ 刷盘策略</text>
+                <text x="370" y="76" font-size="8" fill="#94a3b8" text-anchor="middle">同步刷盘/异步刷盘</text>
+                <text x="370" y="88" font-size="8" fill="#94a3b8" text-anchor="middle">GroupCommit</text>
+
+                <rect x="455" y="40" width="130" height="50" rx="4" fill="#0d2935" stroke="#06b6d4" stroke-width="1"/>
+                <text x="520" y="60" font-size="9" fill="#06b6d4" text-anchor="middle" font-weight="600">④ 构建索引</text>
+                <text x="520" y="76" font-size="8" fill="#94a3b8" text-anchor="middle">ReputMessageService</text>
+                <text x="520" y="88" font-size="8" fill="#94a3b8" text-anchor="middle">异步派发到ConsumeQueue</text>
+
+                <rect x="610" y="40" width="130" height="50" rx="4" fill="#0d2935" stroke="#06b6d4" stroke-width="1"/>
+                <text x="675" y="60" font-size="9" fill="#06b6d4" text-anchor="middle" font-weight="600">⑤ 主从同步</text>
+                <text x="675" y="76" font-size="8" fill="#94a3b8" text-anchor="middle">HAService推送</text>
+                <text x="675" y="88" font-size="8" fill="#94a3b8" text-anchor="middle">Slave拉取CommitLog</text>
+
+                <!-- Arrows -->
+                <line x1="140" y1="65" x2="165" y2="65" stroke="#06b6d4" stroke-width="1" marker-end="url(#arr-rmq3)"/>
+                <line x1="285" y1="65" x2="310" y2="65" stroke="#06b6d4" stroke-width="1" marker-end="url(#arr-rmq3)"/>
+                <line x1="430" y1="65" x2="455" y2="65" stroke="#06b6d4" stroke-width="1" marker-end="url(#arr-rmq3)"/>
+                <line x1="585" y1="65" x2="610" y2="65" stroke="#06b6d4" stroke-width="1" marker-end="url(#arr-rmq3)"/>
+
+                <!-- 刷盘说明 -->
+                <rect x="20" y="115" width="720" height="70" rx="5" fill="#111827" stroke="#334155"/>
+                <text x="40" y="138" font-size="10" fill="#06b6d4" font-weight="600">刷盘策略对比：</text>
+                <text x="40" y="158" font-size="9" fill="#f59e0b" font-weight="600">SYNC_FLUSH（同步刷盘）</text>
+                <text x="210" y="158" font-size="9" fill="#94a3b8">每条消息落盘后才返回ACK，可靠性高，吞吐低（约1-2万TPS）</text>
+                <text x="40" y="176" font-size="9" fill="#f59e0b" font-weight="600">ASYNC_FLUSH（异步刷盘）</text>
+                <text x="210" y="176" font-size="9" fill="#94a3b8">写入PageCache即返回，后台线程定期flush，吞吐高（约10万+ TPS），宕机可能丢少量</text>
+
+                <defs>
+                    <marker id="arr-rmq3" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                        <polygon points="0 0, 6 2.5, 0 5" fill="#06b6d4"/>
+                    </marker>
+                </defs>
+            </svg>
+            <div class="diagram-caption">图3-2：RocketMQ 消息写入与刷盘流程</div>
+        </div>
+
+        <h3>代码示例：Producer 发送事务消息</h3>
+
+        <pre data-lang="Java"><code>// RocketMQ 事务消息 — 解决分布式事务的经典方案
+TransactionMQProducer producer = new TransactionMQProducer("tx-producer-group");
+producer.setNamesrvAddr("nameserver1:9876;nameserver2:9876");
+
+// 设置事务监听器
+producer.setTransactionListener(new TransactionListener() {
+    @Override
+    public LocalTransactionState executeLocalTransaction(Message msg, Object arg) {
+        // 执行本地事务（如：插入订单到DB）
+        try {
+            orderService.createOrder(JSON.parseObject(new String(msg.getBody()), Order.class));
+            return LocalTransactionState.COMMIT_MESSAGE;  // 本地事务成功，提交消息
+        } catch (Exception e) {
+            return LocalTransactionState.ROLLBACK_MESSAGE; // 本地事务失败，回滚消息
+        }
+    }
+
+    @Override
+    public LocalTransactionState checkLocalTransaction(MessageExt msg) {
+        // 回查：Broker长时间未收到确认时会调用此方法
+        // 查询本地事务状态（如：查DB订单是否存在）
+        String orderId = msg.getKeys();
+        boolean exists = orderService.existsOrder(orderId);
+        return exists ? LocalTransactionState.COMMIT_MESSAGE 
+                      : LocalTransactionState.ROLLBACK_MESSAGE;
+    }
+});
+
+producer.start();
+
+// 发送半消息（Half Message）
+Message msg = new Message("order-topic", "TagA", orderId, orderJson.getBytes());
+TransactionSendResult result = producer.sendMessageInTransaction(msg, null);
+// Half消息对Consumer不可见，直到executeLocalTransaction返回COMMIT</code></pre>
+
+        <h3>RocketMQ 特色功能速览</h3>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>特色功能</th>
+                        <th>说明</th>
+                        <th>Kafka是否有</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>事务消息</strong></td>
+                        <td>Half Message + 二阶段提交 + 回查</td>
+                        <td>有事务但语义不同（Kafka Transactions面向流处理）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>延迟消息</strong></td>
+                        <td>18个延迟级别（1s/5s/10s/.../2h）</td>
+                        <td>原生不支持（需外部实现）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>消息过滤</strong></td>
+                        <td>Tag过滤（Broker端） + SQL92表达式过滤</td>
+                        <td>不支持（需Consumer端自行过滤）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>消息轨迹</strong></td>
+                        <td>完整的发送/消费/重试链路追踪</td>
+                        <td>不支持（需配合外部链路追踪系统）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>消息回溯</strong></td>
+                        <td>按时间戳精确回溯消费位点</td>
+                        <td>支持（offsetsForTimes）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>死信队列</strong></td>
+                        <td>消费重试N次后自动进入%DLQ%队列</td>
+                        <td>不支持（需自行实现）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>请求-应答模式</strong></td>
+                        <td>原生支持RPC式同步调用</td>
+                        <td>不支持</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">RocketMQ 的 CommitLog 为什么要混合存储所有 Topic？和 Kafka 每个 Partition 独立文件相比有什么优劣？</div>
+            <div class="qa-answer">
+                <strong>混合存储的核心优势：</strong>当 Topic 数量非常多时（如电商场景可能有上万个Topic），
+                Kafka 模型下每个 Partition 是独立文件，大量 Partition 同时活跃时，写入变成频繁的文件描述符切换，
+                OS 的 Page Cache 被分散到数千个文件中难以有效利用，磁盘 IO 调度器面对大量并发写入退化为近似随机写。
+                实测数据：Kafka 在 Partition 数超过数千时，写入吞吐可能下降 50% 以上（LinkedIn 早期就观察到这一现象）。
+                而 RocketMQ 只有一个 CommitLog 文件在追加写，无论多少 Topic，磁盘IO模式始终是纯粹的顺序写。<br><br>
+                <strong>劣势：</strong>消费时需要"查 ConsumeQueue 索引 + 跳转读取 CommitLog"两步操作，不如 Kafka 直接顺序读 Partition 文件高效。
+                而且当某个 Topic 的消息量极大时，该 Topic 的消息散布在 CommitLog 各处，消费产生大量随机读（Page Cache 命中率下降）。
+                此时 Kafka 的"单 Partition 顺序读"优势明显。<br><br>
+                <strong>总结：</strong>多 Topic 少消费（或消费紧跟生产尾部） → RocketMQ 更优；少 Topic 大吞吐（或有大量消费积压回溯） → Kafka 更优。
+                这也是为什么 RocketMQ 适合电商场景（万级 Topic，每个 Topic 消息量不大），Kafka 适合数据管道场景（少量 Topic，海量数据）。
+            </div>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">RocketMQ 的 NameServer 和 Kafka 的 ZooKeeper/KRaft 有什么本质区别？</div>
+            <div class="qa-answer">
+                三点本质区别：<br>
+                ①<strong>一致性模型不同</strong>：ZK/KRaft 是 CP（强一致性），NameServer 是 AP（最终一致性）。
+                NameServer 各节点互不通信，可能存在短暂的路由不一致（最长30秒心跳周期）。<br>
+                ②<strong>职责范围不同</strong>：ZK/KRaft 负责选举+元数据+协调+分区分配，
+                NameServer 只做路由注册发现，Leader选举由 Controller 组件处理（5.x）或 DLedger（4.5+）。<br>
+                ③<strong>复杂度不同</strong>：ZK 是独立的分布式协调服务（ZAB协议），KRaft 需要 Raft 日志复制，
+                NameServer 就是个内存Map（brokerAddrTable/topicRouteTable）+心跳检测+过期剔除，几千行代码搞定。<br>
+                ④<strong>故障影响不同</strong>：所有 NameServer 全部宕机时，已运行的 Producer/Consumer 仍可正常工作（路由缓存在本地），
+                只是无法感知路由变更。而 ZK 全部宕机时，Kafka Controller 失效，无法进行 Leader 选举和 Partition 分配。
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- 第四章：Pulsar 核心架构 -->
+    <!-- ============================================================ -->
+    <section class="chapter" id="ch4">
+        <div class="chapter-header">
+            <div class="chapter-number">Chapter 04</div>
+            <h2><span class="pulsar">Pulsar</span> 核心架构</h2>
+        </div>
+
+        <p>
+            如果说 Kafka 和 RocketMQ 都是"存算一体"的设计（Broker 既处理计算又负责存储），
+            那么 Pulsar 代表了下一代的思想——<strong>存算分离（Disaggregated Storage and Compute）</strong>。
+            Broker 是无状态的计算层，Apache BookKeeper 是有状态的存储层。
+            这就像数据库界从单体 MySQL 演进到计算存储分离的 TiDB/Aurora 一样。
+        </p>
+
+        <p>
+            从我（Jay Kreps）的视角看，Pulsar 的设计解决了 Kafka 的一个深层痛点：
+            <strong>Partition 与 Broker 紧耦合导致的扩缩容困难</strong>。
+            在 Kafka 中，增加 Broker 需要手动 reassign partition——数据迁移既慢又危险。
+            而 Pulsar 的 Broker 无状态，加减机器只需负载均衡重新分配 Topic ownership，秒级完成。
+        </p>
+
+        <h3>架构全景图</h3>
+
+        <div class="diagram">
+            <svg width="860" height="520" viewBox="0 0 860 520" xmlns="http://www.w3.org/2000/svg">
+                <!-- 计算层 -->
+                <rect x="50" y="20" width="760" height="160" rx="8" fill="none" stroke="#8b5cf6" stroke-width="1.5"/>
+                <text x="430" y="42" font-size="12" fill="#8b5cf6" text-anchor="middle" font-weight="600">计算层 — Stateless Broker Cluster</text>
+
+                <rect x="80" y="55" width="150" height="110" rx="5" fill="#1a1040" stroke="#8b5cf6" stroke-width="1"/>
+                <text x="155" y="77" font-size="10" fill="#a78bfa" text-anchor="middle" font-weight="600">Broker 0</text>
+                <text x="155" y="97" font-size="8" fill="#94a3b8" text-anchor="middle">Topic ownership</text>
+                <text x="155" y="112" font-size="8" fill="#94a3b8" text-anchor="middle">消息路由/分发</text>
+                <text x="155" y="127" font-size="8" fill="#94a3b8" text-anchor="middle">Schema Registry</text>
+                <text x="155" y="142" font-size="8" fill="#94a3b8" text-anchor="middle">无本地状态!</text>
+                <rect x="92" y="147" width="126" height="12" rx="2" fill="#4c1d95" stroke="none"/>
+                <text x="155" y="157" font-size="7" fill="#e9d5ff" text-anchor="middle">Managed Ledger Cache</text>
+
+                <rect x="260" y="55" width="150" height="110" rx="5" fill="#1a1040" stroke="#8b5cf6" stroke-width="1"/>
+                <text x="335" y="77" font-size="10" fill="#a78bfa" text-anchor="middle" font-weight="600">Broker 1</text>
+                <text x="335" y="97" font-size="8" fill="#94a3b8" text-anchor="middle">Topic ownership</text>
+                <text x="335" y="112" font-size="8" fill="#94a3b8" text-anchor="middle">消息路由/分发</text>
+                <text x="335" y="127" font-size="8" fill="#94a3b8" text-anchor="middle">负载均衡</text>
+                <text x="335" y="142" font-size="8" fill="#94a3b8" text-anchor="middle">无本地状态!</text>
+                <rect x="272" y="147" width="126" height="12" rx="2" fill="#4c1d95" stroke="none"/>
+                <text x="335" y="157" font-size="7" fill="#e9d5ff" text-anchor="middle">Managed Ledger Cache</text>
+
+                <rect x="440" y="55" width="150" height="110" rx="5" fill="#1a1040" stroke="#8b5cf6" stroke-width="1"/>
+                <text x="515" y="77" font-size="10" fill="#a78bfa" text-anchor="middle" font-weight="600">Broker 2</text>
+                <text x="515" y="97" font-size="8" fill="#94a3b8" text-anchor="middle">Topic ownership</text>
+                <text x="515" y="112" font-size="8" fill="#94a3b8" text-anchor="middle">消息路由/分发</text>
+                <text x="515" y="127" font-size="8" fill="#94a3b8" text-anchor="middle">Pulsar Functions</text>
+                <text x="515" y="142" font-size="8" fill="#94a3b8" text-anchor="middle">无本地状态!</text>
+                <rect x="452" y="147" width="126" height="12" rx="2" fill="#4c1d95" stroke="none"/>
+                <text x="515" y="157" font-size="7" fill="#e9d5ff" text-anchor="middle">Managed Ledger Cache</text>
+
+                <!-- 扩缩容标注 -->
+                <rect x="630" y="70" width="160" height="80" rx="4" fill="#1e1040" stroke="#a78bfa" stroke-dasharray="3"/>
+                <text x="710" y="92" font-size="9" fill="#a78bfa" text-anchor="middle" font-weight="600">弹性伸缩</text>
+                <text x="710" y="110" font-size="8" fill="#94a3b8" text-anchor="middle">加Broker: 秒级生效</text>
+                <text x="710" y="125" font-size="8" fill="#94a3b8" text-anchor="middle">无需数据迁移</text>
+                <text x="710" y="140" font-size="8" fill="#94a3b8" text-anchor="middle">只需重分配ownership</text>
+
+                <!-- 存储层 -->
+                <rect x="50" y="220" width="760" height="170" rx="8" fill="none" stroke="#f59e0b" stroke-width="1.5"/>
+                <text x="430" y="243" font-size="12" fill="#f59e0b" text-anchor="middle" font-weight="600">存储层 — Apache BookKeeper Cluster</text>
+
+                <rect x="80" y="258" width="140" height="115" rx="5" fill="#1a1a0a" stroke="#f59e0b" stroke-width="1"/>
+                <text x="150" y="278" font-size="10" fill="#fbbf24" text-anchor="middle" font-weight="600">Bookie 0</text>
+                <rect x="92" y="288" width="116" height="20" rx="2" fill="#2d2005" stroke="#d97706" stroke-width="0.5"/>
+                <text x="150" y="302" font-size="8" fill="#fcd34d" text-anchor="middle">Journal (WAL)</text>
+                <rect x="92" y="313" width="116" height="20" rx="2" fill="#2d2005" stroke="#d97706" stroke-width="0.5"/>
+                <text x="150" y="327" font-size="8" fill="#fcd34d" text-anchor="middle">Ledger Storage</text>
+                <rect x="92" y="338" width="116" height="20" rx="2" fill="#2d2005" stroke="#475569" stroke-width="0.5"/>
+                <text x="150" y="352" font-size="8" fill="#94a3b8" text-anchor="middle">Entry Log + Index</text>
+
+                <rect x="250" y="258" width="140" height="115" rx="5" fill="#1a1a0a" stroke="#f59e0b" stroke-width="1"/>
+                <text x="320" y="278" font-size="10" fill="#fbbf24" text-anchor="middle" font-weight="600">Bookie 1</text>
+                <rect x="262" y="288" width="116" height="20" rx="2" fill="#2d2005" stroke="#d97706" stroke-width="0.5"/>
+                <text x="320" y="302" font-size="8" fill="#fcd34d" text-anchor="middle">Journal (WAL)</text>
+                <rect x="262" y="313" width="116" height="20" rx="2" fill="#2d2005" stroke="#d97706" stroke-width="0.5"/>
+                <text x="320" y="327" font-size="8" fill="#fcd34d" text-anchor="middle">Ledger Storage</text>
+                <rect x="262" y="338" width="116" height="20" rx="2" fill="#2d2005" stroke="#475569" stroke-width="0.5"/>
+                <text x="320" y="352" font-size="8" fill="#94a3b8" text-anchor="middle">Entry Log + Index</text>
+
+                <rect x="420" y="258" width="140" height="115" rx="5" fill="#1a1a0a" stroke="#f59e0b" stroke-width="1"/>
+                <text x="490" y="278" font-size="10" fill="#fbbf24" text-anchor="middle" font-weight="600">Bookie 2</text>
+                <rect x="432" y="288" width="116" height="20" rx="2" fill="#2d2005" stroke="#d97706" stroke-width="0.5"/>
+                <text x="490" y="302" font-size="8" fill="#fcd34d" text-anchor="middle">Journal (WAL)</text>
+                <rect x="432" y="313" width="116" height="20" rx="2" fill="#2d2005" stroke="#d97706" stroke-width="0.5"/>
+                <text x="490" y="327" font-size="8" fill="#fcd34d" text-anchor="middle">Ledger Storage</text>
+                <rect x="432" y="338" width="116" height="20" rx="2" fill="#2d2005" stroke="#475569" stroke-width="0.5"/>
+                <text x="490" y="352" font-size="8" fill="#94a3b8" text-anchor="middle">Entry Log + Index</text>
+
+                <!-- Segment 分布示意 -->
+                <rect x="600" y="258" width="190" height="115" rx="5" fill="#111827" stroke="#334155" stroke-width="1"/>
+                <text x="695" y="278" font-size="9" fill="#f59e0b" text-anchor="middle" font-weight="600">Segment 分布</text>
+                <text x="695" y="300" font-size="8" fill="#94a3b8" text-anchor="middle">Topic-A Seg-1: Bookie{0,1,2}</text>
+                <text x="695" y="316" font-size="8" fill="#94a3b8" text-anchor="middle">Topic-A Seg-2: Bookie{1,2,3}</text>
+                <text x="695" y="332" font-size="8" fill="#94a3b8" text-anchor="middle">Topic-A Seg-3: Bookie{0,2,3}</text>
+                <text x="695" y="352" font-size="8" fill="#64748b" text-anchor="middle">每个Segment(Ledger)写入</text>
+                <text x="695" y="365" font-size="8" fill="#64748b" text-anchor="middle">不同的Bookie组合(条带化)</text>
+
+                <!-- 元数据层 -->
+                <rect x="250" y="420" width="360" height="55" rx="6" fill="none" stroke="#475569" stroke-width="1"/>
+                <text x="430" y="442" font-size="10" fill="#94a3b8" text-anchor="middle" font-weight="600">元数据存储 — ZooKeeper / Oxia(新一代替代)</text>
+                <text x="430" y="460" font-size="8" fill="#64748b" text-anchor="middle">Broker注册 · Topic ownership · Ledger元数据 · Subscription Cursor</text>
+
+                <!-- 连接线: Broker → Bookie -->
+                <line x1="155" y1="165" x2="150" y2="258" stroke="#a78bfa" stroke-width="1.2" stroke-dasharray="4" marker-end="url(#arr-p)"/>
+                <line x1="335" y1="165" x2="320" y2="258" stroke="#a78bfa" stroke-width="1.2" stroke-dasharray="4" marker-end="url(#arr-p)"/>
+                <line x1="515" y1="165" x2="490" y2="258" stroke="#a78bfa" stroke-width="1.2" stroke-dasharray="4" marker-end="url(#arr-p)"/>
+
+                <!-- 连接线: Broker → ZK -->
+                <line x1="335" y1="165" x2="400" y2="420" stroke="#475569" stroke-width="0.7" stroke-dasharray="2"/>
+                <!-- 连接线: Bookie → ZK -->
+                <line x1="320" y1="373" x2="380" y2="420" stroke="#475569" stroke-width="0.7" stroke-dasharray="2"/>
+
+                <!-- Producer & Consumer -->
+                <rect x="620" y="435" width="100" height="30" rx="4" fill="#1e293b" stroke="#f59e0b" stroke-width="1"/>
+                <text x="670" y="454" font-size="9" fill="#f59e0b" text-anchor="middle">Producer</text>
+                <rect x="730" y="435" width="100" height="30" rx="4" fill="#1e293b" stroke="#10b981" stroke-width="1"/>
+                <text x="780" y="454" font-size="9" fill="#10b981" text-anchor="middle">Consumer</text>
+
+                <line x1="670" y1="435" x2="430" y2="180" stroke="#f59e0b" stroke-width="0.8" marker-end="url(#arr-p)"/>
+                <line x1="515" y1="165" x2="780" y2="435" stroke="#10b981" stroke-width="0.8" marker-end="url(#arr-p2)"/>
+
+                <defs>
+                    <marker id="arr-p" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                        <polygon points="0 0, 6 2.5, 0 5" fill="#a78bfa"/>
+                    </marker>
+                    <marker id="arr-p2" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                        <polygon points="0 0, 6 2.5, 0 5" fill="#10b981"/>
+                    </marker>
+                </defs>
+            </svg>
+            <div class="diagram-caption">图4-1：Pulsar 存算分离架构 — 无状态Broker + BookKeeper存储 + 元数据服务</div>
+        </div>
+
+        <h3>核心概念详解</h3>
+
+        <h4>1. 存算分离 — 为什么是核心差异？</h4>
+        <p>
+            在 Kafka/RocketMQ 中，数据存储在 Broker 的本地磁盘上。Broker 既是计算节点又是存储节点。
+            这意味着：①扩容需要数据迁移（慢且危险）；②Broker宕机需要等副本追上（恢复慢）；③存储容量受单机磁盘限制。
+        </p>
+        <p>
+            Pulsar 的 Broker <strong>不存储任何消息数据</strong>。它只负责：接收消息 → 写入BookKeeper → 响应消费者读取请求。
+            数据的持久化、复制、容错全部由 BookKeeper 处理。这意味着：
+        </p>
+        <ul>
+            <li><strong>扩容：</strong>加 Broker 只需重新分配 Topic ownership（秒级），无需数据迁移</li>
+            <li><strong>故障恢复：</strong>Broker 宕机后，其他 Broker 接管 Topic 立即可服务，无需数据恢复</li>
+            <li><strong>独立扩展：</strong>计算不够加 Broker，存储不够加 Bookie，互不影响</li>
+        </ul>
+
+        <h4>2. BookKeeper 与 Ledger</h4>
+        <p>
+            BookKeeper 是一个分布式日志存储系统，数据按 <strong>Ledger</strong>（账本）组织。
+            每个 Pulsar Topic Partition 由一系列 Ledger 串联而成。每个 Ledger 写满（或定时切换）后会被封存（sealed），
+            新数据写入新 Ledger。
+        </p>
+        <p>
+            关键特性：每个 Ledger 的数据条带化（striping）分散写入多个 Bookie。
+            例如 Ensemble=5, Write Quorum=3, Ack Quorum=2，表示：
+        </p>
+        <ul>
+            <li>每条消息（Entry）写入 5 个 Bookie 中的 3 个（条带分布）</li>
+            <li>收到 2 个 Bookie 确认即认为写入成功</li>
+            <li>数据天然分散在整个集群中，无热点 Bookie</li>
+        </ul>
+
+        <h4>3. Subscription（订阅模式）</h4>
+        <p>
+            Pulsar 的消费模型是 <strong>Topic → Subscription → Consumer</strong> 三层结构。
+            一个 Topic 可以有多个 Subscription（类比 Kafka 的多个 Consumer Group），
+            每个 Subscription 独立维护自己的消费进度（Cursor），互不影响。
+            同一个 Subscription 下可以有多个 Consumer，消息如何分配给这些 Consumer 取决于订阅类型。
+            这比 Kafka 的 Consumer Group 模型更灵活——Kafka 只有一种分配方式（按 Partition 独占分配），
+            而 Pulsar 提供<strong>四种订阅模式</strong>：
+        </p>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>订阅模式</th>
+                        <th>行为</th>
+                        <th>类比</th>
+                        <th>适用场景</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Exclusive</strong></td>
+                        <td>只有一个消费者可连接</td>
+                        <td>独占锁</td>
+                        <td>严格顺序消费</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Failover</strong></td>
+                        <td>主消费者故障后备份接管</td>
+                        <td>主备模式</td>
+                        <td>高可用顺序消费</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Shared</strong></td>
+                        <td>消息轮询分发给多个消费者</td>
+                        <td>传统MQ的竞争消费模式</td>
+                        <td>负载均衡、无序场景</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Key_Shared</strong></td>
+                        <td>相同Key的消息固定发给同一消费者</td>
+                        <td>按Key分区消费</td>
+                        <td>保证Key级别顺序</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h4>4. Topic 层级与多租户</h4>
+        <p>
+            Pulsar 的 Topic 有完整的层级结构：<code>persistent://tenant/namespace/topic</code>
+        </p>
+        <ul>
+            <li><strong>Tenant（租户）</strong>：顶层隔离单元，对应一个业务团队或客户</li>
+            <li><strong>Namespace（命名空间）</strong>：租户下的逻辑分组，可配置独立的策略（TTL、配额、复制策略）</li>
+            <li><strong>Topic</strong>：实际的消息主题</li>
+        </ul>
+        <p>
+            这种原生的多租户设计让 Pulsar 非常适合 SaaS 平台和大型企业内部共享集群。
+            Kafka 实现类似隔离需要额外的 ACL + Quotas 配置。
+        </p>
+
+        <h4>5. Cursor（游标）——消费位点管理</h4>
+        <p>
+            不同于 Kafka 用 offset 整数标识消费位置，Pulsar 使用 <strong>Cursor</strong>。
+            Cursor 记录的是 <code>(LedgerId, EntryId)</code> 二元组。
+            更重要的是，Pulsar 支持<strong>单条消息级别的 ACK</strong>（Individual Acknowledge），
+            而不仅仅是 Kafka 的"offset之前全部确认"。这对于乱序处理场景非常有用。
+        </p>
+
+        <h4>6. Tiered Storage（分层存储）</h4>
+        <p>
+            Pulsar 原生支持将冷数据（已封存的旧 Ledger）自动卸载到低成本存储（如 S3、HDFS、GCS）。
+            BookKeeper 只保留热数据（近期 Segment），历史数据透明地从对象存储中读取。
+            卸载策略可按时间（如保留最近7天在 BookKeeper）或大小（如每个 Topic 最多保留10GB本地数据）配置。
+            这意味着：
+        </p>
+        <ul>
+            <li><strong>存储成本大幅降低：</strong>热数据用 SSD，冷数据用 S3（成本差 10-50 倍）</li>
+            <li><strong>无限消息保留：</strong>不受本地磁盘容量限制，可保留数月甚至数年的消息
+                （注意：需要正确规划对象存储容量和成本，并非真正"无限"——底层仍受存储预算约束）</li>
+            <li><strong>对消费者透明：</strong>消费者无需关心消息在 BookKeeper 还是 S3 中，API一致</li>
+        </ul>
+        <p>
+            Kafka 也有类似的 KIP-405（Tiered Storage），从 Kafka 3.6 开始 Early Access，
+            在 Kafka 4.0+ 中逐步走向生产可用，但整体成熟度和灵活度仍不如 Pulsar（Pulsar 从 2.4 起就支持）。
+        </p>
+
+        <h3>代码示例：Pulsar Consumer 四种订阅模式</h3>
+
+        <pre data-lang="Java"><code>PulsarClient client = PulsarClient.builder()
+    .serviceUrl("pulsar://broker1:6650,broker2:6650")
+    .build();
+
+// === Shared 模式：多消费者负载均衡 ===
+Consumer&lt;String&gt; sharedConsumer = client.newConsumer(Schema.STRING)
+    .topic("persistent://my-tenant/my-ns/order-events")
+    .subscriptionName("order-processing")
+    .subscriptionType(SubscriptionType.Shared)      // 关键：Shared模式
+    .subscribe();
+
+// === Key_Shared 模式：相同Key路由到同一Consumer ===
+Consumer&lt;String&gt; keySharedConsumer = client.newConsumer(Schema.STRING)
+    .topic("persistent://my-tenant/my-ns/order-events")
+    .subscriptionName("order-by-user")
+    .subscriptionType(SubscriptionType.Key_Shared)  // 按Key分配
+    .subscribe();
+
+// === 消费消息（支持单条ACK）===
+while (true) {
+    Message&lt;String&gt; msg = sharedConsumer.receive(100, TimeUnit.MILLISECONDS);
+    if (msg != null) {
+        try {
+            processOrder(msg.getValue());
+            sharedConsumer.acknowledge(msg);           // 单条确认
+        } catch (Exception e) {
+            sharedConsumer.negativeAcknowledge(msg);   // 否定确认，触发重投
+        }
+    }
+}
+
+// === Pulsar 独有：延迟消息投递 ===
+Producer&lt;String&gt; producer = client.newProducer(Schema.STRING)
+    .topic("persistent://my-tenant/my-ns/delay-tasks")
+    .create();
+
+producer.newMessage()
+    .value("cancel-order-if-unpaid")
+    .deliverAfter(30, TimeUnit.MINUTES)  // 30分钟后才对消费者可见
+    .send();</code></pre>
+
+        <div class="qa-block">
+            <div class="qa-question">Pulsar 的存算分离相比 Kafka 有什么具体的优势和劣势？</div>
+            <div class="qa-answer">
+                <strong>优势：</strong><br>
+                ①<strong>弹性伸缩快</strong>：加减 Broker 秒级生效，Kafka 需要 partition reassignment（可能数小时）；<br>
+                ②<strong>故障恢复快</strong>：Broker 无状态，宕机后其他 Broker 立即接管，Kafka 需要 ISR 追赶；<br>
+                ③<strong>存储无限扩展</strong>：Bookie 可独立扩容，不受单机磁盘限制；<br>
+                ④<strong>IO隔离</strong>：BookKeeper 的 Journal（写）和 Ledger Storage（读）分别用独立磁盘，读写互不干扰。<br><br>
+                <strong>劣势：</strong><br>
+                ①<strong>运维复杂</strong>：需要维护 Broker + BookKeeper + ZK/Oxia 三套集群（Oxia 正在简化这一点）；<br>
+                ②<strong>延迟略高</strong>：写路径多一跳（Broker→Bookie），P99延迟通常高于 Kafka；<br>
+                ③<strong>生态成熟度</strong>：社区规模和工具链不如 Kafka 丰富；<br>
+                ④<strong>端到端性能</strong>：极致吞吐场景下，Kafka 的零拷贝+顺序读仍有优势。
+            </div>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">Pulsar 的 Segment（Ledger）机制相比 Kafka 的 Partition 有什么本质不同？</div>
+            <div class="qa-answer">
+                Kafka 的 Partition 是一个<strong>长生命周期的、绑定在特定 Broker 上的</strong>日志文件。
+                一旦创建，数据就"钉死"在那台机器上，直到被 reassign。
+                Kafka 的 Log Segment 只是同一 Partition 内的文件分片（按1GB或时间滚动），仍然在同一台 Broker 上。<br><br>
+                Pulsar 的 Topic Partition 由一连串<strong>短生命周期的 Ledger</strong> 串联而成。
+                每个 Ledger 写满（默认50000条 Entry 或 通过 managedLedgerMaxLedgerRolloverTimeMinutes 控制时间）就封存（sealed），
+                新 Ledger 可以写入完全不同的 Bookie 组合。封存的 Ledger 是<strong>不可变的</strong>（immutable），
+                这一特性极大简化了缓存、复制和垃圾回收。
+                这带来了三个好处：<br>
+                ①<strong>数据天然分散</strong>：不同时间段的数据在不同 Bookie 上，无热点；<br>
+                ②<strong>扩容即可用</strong>：新加的 Bookie 会立即被新 Ledger 使用，无需迁移旧数据；<br>
+                ③<strong>容量均衡</strong>：通过条带化写入，集群存储空间自动均衡利用。<br><br>
+                类比：Kafka 的 Partition 像一个不可移动的保险箱，Pulsar 的 Ledger 像可以随时换仓库的集装箱。
+                代价：Ledger 切换时需要向元数据服务（ZK/Oxia）更新元数据，引入少量延迟尖刺（Spike）。
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- 第五章：三者架构横向对比 -->
+    <!-- ============================================================ -->
+    <section class="chapter" id="ch5">
+        <div class="chapter-header">
+            <div class="chapter-number">Chapter 05</div>
+            <h2>三者架构横向对比</h2>
+        </div>
+
+        <p>
+            这一章将 Kafka、RocketMQ、Pulsar 放在同一个维度下逐项对比。
+            面试中被问到"这三个有什么区别"时，能从<strong>架构设计、存储模型、消费模型、功能特性、运维难度</strong>
+            五个维度结构化回答，会大大加分。
+        </p>
+
+        <h3>全维度对比表</h3>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>对比维度</th>
+                        <th><span class="tag-kafka">Kafka</span></th>
+                        <th><span class="tag-rocketmq">RocketMQ</span></th>
+                        <th><span class="tag-pulsar">Pulsar</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>架构模型</strong></td>
+                        <td>存算一体，Broker有状态</td>
+                        <td>存算一体，Broker有状态</td>
+                        <td>存算分离，Broker无状态</td>
+                    </tr>
+                    <tr>
+                        <td><strong>元数据管理</strong></td>
+                        <td>KRaft（内嵌Raft，4.0+唯一模式）</td>
+                        <td>NameServer（无状态AP）</td>
+                        <td>ZooKeeper / Oxia(StreamNative推出的轻量替代)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>存储模型</strong></td>
+                        <td>每Partition独立日志文件</td>
+                        <td>所有Topic混写CommitLog + ConsumeQueue索引</td>
+                        <td>Segment化Ledger存储在BookKeeper</td>
+                    </tr>
+                    <tr>
+                        <td><strong>副本机制</strong></td>
+                        <td>ISR（Leader-Follower拉取式）</td>
+                        <td>Master-Slave / Controller模式(5.x推荐)</td>
+                        <td>BookKeeper Quorum Write（条带化）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>消费模型</strong></td>
+                        <td>Consumer Group（Pull）</td>
+                        <td>Consumer Group（Pull + 长轮询）</td>
+                        <td>4种订阅模式（Exclusive/Failover/Shared/Key_Shared）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>消息确认</strong></td>
+                        <td>Offset提交（批量）</td>
+                        <td>Offset提交（批量）</td>
+                        <td>单条ACK / 累积ACK</td>
+                    </tr>
+                    <tr>
+                        <td><strong>顺序保证</strong></td>
+                        <td>Partition内有序</td>
+                        <td>MessageQueue内有序</td>
+                        <td>Partition内有序 / Key_Shared</td>
+                    </tr>
+                    <tr>
+                        <td><strong>事务消息</strong></td>
+                        <td>有（面向流处理的Exactly-Once）</td>
+                        <td>有（面向业务的半消息+回查）</td>
+                        <td>有（Pulsar Transaction API）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>延迟消息</strong></td>
+                        <td>不支持原生（4.0+ 可通过Tiered Storage间接实现定时投递）</td>
+                        <td>支持（4.x: 18个固定级别 / 5.x: 任意精度定时消息，基于TimerWheel实现）</td>
+                        <td>支持（任意精度延迟）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>消息过滤</strong></td>
+                        <td>不支持（Consumer端自过滤）</td>
+                        <td>Tag + SQL92表达式（Broker端）</td>
+                        <td>Selector（Broker端）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>死信队列</strong></td>
+                        <td>不支持原生</td>
+                        <td>内建（%DLQ%前缀）</td>
+                        <td>内建</td>
+                    </tr>
+                    <tr>
+                        <td><strong>消息回溯</strong></td>
+                        <td>按offset/时间戳</td>
+                        <td>按时间戳</td>
+                        <td>按MessageId/时间戳</td>
+                    </tr>
+                    <tr>
+                        <td><strong>多租户</strong></td>
+                        <td>弱（ACL + Quota）</td>
+                        <td>弱</td>
+                        <td>原生支持（Tenant/Namespace）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>跨地域复制</strong></td>
+                        <td>MirrorMaker（工具级别）</td>
+                        <td>5.x支持（Connector方式，非内建）</td>
+                        <td>内建 Geo-Replication</td>
+                    </tr>
+                    <tr>
+                        <td><strong>扩缩容难度</strong></td>
+                        <td>高（需Partition reassign）</td>
+                        <td>中（手动均衡）</td>
+                        <td>低（加减Broker秒级）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>吞吐量（单集群）</strong></td>
+                        <td>极高（百万级TPS）</td>
+                        <td>高（十万级TPS）</td>
+                        <td>高（十万级TPS）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>端到端延迟</strong></td>
+                        <td>低（ms级）</td>
+                        <td>低（ms级）</td>
+                        <td>较低（多一跳，略高）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>开发语言</strong></td>
+                        <td>Scala + Java</td>
+                        <td>Java</td>
+                        <td>Java</td>
+                    </tr>
+                    <tr>
+                        <td><strong>社区生态</strong></td>
+                        <td>最成熟（Confluent商业化）</td>
+                        <td>中国社区活跃（阿里主导）</td>
+                        <td>快速增长（StreamNative）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>运维复杂度</strong></td>
+                        <td>低（4.0+内嵌KRaft，单集群自治）</td>
+                        <td>低（NameServer极简）</td>
+                        <td>高（Broker + BookKeeper + ZK三套集群）</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>一图总结：三者核心设计差异</h3>
+
+        <div class="diagram">
+            <svg width="820" height="300" viewBox="0 0 820 300" xmlns="http://www.w3.org/2000/svg">
+                <!-- Kafka -->
+                <rect x="20" y="30" width="240" height="250" rx="8" fill="#1a1008" stroke="#ff6b35" stroke-width="1.5"/>
+                <text x="140" y="58" font-size="13" fill="#ff6b35" text-anchor="middle" font-weight="700">Kafka</text>
+                <text x="140" y="78" font-size="9" fill="#64748b" text-anchor="middle">分布式提交日志</text>
+                
+                <line x1="40" y1="90" x2="240" y2="90" stroke="#334155" stroke-width="0.5"/>
+                
+                <text x="140" y="115" font-size="10" fill="#ffaa80" text-anchor="middle" font-weight="600">核心哲学</text>
+                <text x="140" y="135" font-size="9" fill="#94a3b8" text-anchor="middle">"日志即数据库"</text>
+                <text x="140" y="150" font-size="9" fill="#94a3b8" text-anchor="middle">极致简化 → 极致性能</text>
+
+                <text x="140" y="178" font-size="10" fill="#ffaa80" text-anchor="middle" font-weight="600">最强项</text>
+                <text x="140" y="198" font-size="9" fill="#94a3b8" text-anchor="middle">超高吞吐 + 流计算</text>
+                <text x="140" y="213" font-size="9" fill="#94a3b8" text-anchor="middle">零拷贝 + 顺序IO</text>
+
+                <text x="140" y="240" font-size="10" fill="#ffaa80" text-anchor="middle" font-weight="600">最弱项</text>
+                <text x="140" y="260" font-size="9" fill="#94a3b8" text-anchor="middle">运维扩缩容复杂</text>
+                <text x="140" y="275" font-size="9" fill="#94a3b8" text-anchor="middle">业务功能缺失多</text>
+
+                <!-- RocketMQ -->
+                <rect x="290" y="30" width="240" height="250" rx="8" fill="#081a1a" stroke="#06b6d4" stroke-width="1.5"/>
+                <text x="410" y="58" font-size="13" fill="#06b6d4" text-anchor="middle" font-weight="700">RocketMQ</text>
+                <text x="410" y="78" font-size="9" fill="#64748b" text-anchor="middle">业务消息中间件</text>
+                
+                <line x1="310" y1="90" x2="510" y2="90" stroke="#334155" stroke-width="0.5"/>
+                
+                <text x="410" y="115" font-size="10" fill="#67e8f9" text-anchor="middle" font-weight="600">核心哲学</text>
+                <text x="410" y="135" font-size="9" fill="#94a3b8" text-anchor="middle">"功能全面，金融级可靠"</text>
+                <text x="410" y="150" font-size="9" fill="#94a3b8" text-anchor="middle">业务需求驱动设计</text>
+
+                <text x="410" y="178" font-size="10" fill="#67e8f9" text-anchor="middle" font-weight="600">最强项</text>
+                <text x="410" y="198" font-size="9" fill="#94a3b8" text-anchor="middle">事务消息 + 延迟消息</text>
+                <text x="410" y="213" font-size="9" fill="#94a3b8" text-anchor="middle">消息过滤 + 轨迹追踪</text>
+
+                <text x="410" y="240" font-size="10" fill="#67e8f9" text-anchor="middle" font-weight="600">最弱项</text>
+                <text x="410" y="260" font-size="9" fill="#94a3b8" text-anchor="middle">国际社区较小</text>
+                <text x="410" y="275" font-size="9" fill="#94a3b8" text-anchor="middle">流计算能力弱</text>
+
+                <!-- Pulsar -->
+                <rect x="560" y="30" width="240" height="250" rx="8" fill="#0f0a1a" stroke="#8b5cf6" stroke-width="1.5"/>
+                <text x="680" y="58" font-size="13" fill="#8b5cf6" text-anchor="middle" font-weight="700">Pulsar</text>
+                <text x="680" y="78" font-size="9" fill="#64748b" text-anchor="middle">云原生统一消息流平台</text>
+                
+                <line x1="580" y1="90" x2="780" y2="90" stroke="#334155" stroke-width="0.5"/>
+                
+                <text x="680" y="115" font-size="10" fill="#c4b5fd" text-anchor="middle" font-weight="600">核心哲学</text>
+                <text x="680" y="135" font-size="9" fill="#94a3b8" text-anchor="middle">"存算分离，弹性为王"</text>
+                <text x="680" y="150" font-size="9" fill="#94a3b8" text-anchor="middle">云原生思维驱动设计</text>
+
+                <text x="680" y="178" font-size="10" fill="#c4b5fd" text-anchor="middle" font-weight="600">最强项</text>
+                <text x="680" y="198" font-size="9" fill="#94a3b8" text-anchor="middle">弹性伸缩 + 多租户</text>
+                <text x="680" y="213" font-size="9" fill="#94a3b8" text-anchor="middle">Geo-Replication内建</text>
+
+                <text x="680" y="240" font-size="10" fill="#c4b5fd" text-anchor="middle" font-weight="600">最弱项</text>
+                <text x="680" y="260" font-size="9" fill="#94a3b8" text-anchor="middle">运维三套集群复杂</text>
+                <text x="680" y="275" font-size="9" fill="#94a3b8" text-anchor="middle">写路径延迟略高</text>
+            </svg>
+            <div class="diagram-caption">图5-1：三大MQ核心哲学与优劣势一图速览</div>
+        </div>
+
+        <div class="callout">
+            <div class="callout-title">面试终极总结话术</div>
+            <p>
+                <strong>选 Kafka：</strong>你需要超高吞吐的数据管道，做日志收集、流计算、CDC，Topic数不会太多（百级）。<br>
+                <strong>选 RocketMQ：</strong>你需要丰富的业务消息特性（事务、延迟、过滤、轨迹），国内电商/金融场景首选。<br>
+                <strong>选 Pulsar：</strong>你需要云原生弹性、多租户隔离、跨地域复制，或者又要队列又要流的统一平台。
+            </p>
+        </div>
+    </section>
+
+    <hr>
+
+    <!-- ============================================================ -->
+    <!-- 第六章：高频考点 - 消息可靠性 -->
+    <!-- ============================================================ -->
+    <section class="chapter" id="ch6">
+        <div class="chapter-header">
+            <div class="chapter-number">Chapter 06</div>
+            <h2>高频考点：消息可靠性保证</h2>
+        </div>
+
+        <p>
+            <strong>"如何保证消息不丢失？"</strong>——这是消息队列面试的第一高频题。
+            消息从生产到消费经历三个阶段，每个阶段都可能丢失。
+            回答时必须按<strong>"三段论"</strong>结构展开：生产端、Broker端、消费端。
+        </p>
+
+        <h3>消息丢失的三个阶段</h3>
+
+        <div class="diagram">
+            <svg width="820" height="180" viewBox="0 0 820 180" xmlns="http://www.w3.org/2000/svg">
+                <!-- 三阶段 -->
+                <rect x="30" y="40" width="220" height="80" rx="6" fill="#1e1008" stroke="#ff6b35" stroke-width="1.2"/>
+                <text x="140" y="65" font-size="11" fill="#ff6b35" text-anchor="middle" font-weight="700">阶段一：生产端</text>
+                <text x="140" y="85" font-size="9" fill="#94a3b8" text-anchor="middle">网络抖动 / 未收到ACK</text>
+                <text x="140" y="100" font-size="9" fill="#94a3b8" text-anchor="middle">Producer宕机丢失缓冲区</text>
+                <text x="140" y="115" font-size="9" fill="#f87171" text-anchor="middle">丢失概率：中</text>
+
+                <rect x="290" y="40" width="220" height="80" rx="6" fill="#081215" stroke="#06b6d4" stroke-width="1.2"/>
+                <text x="400" y="65" font-size="11" fill="#06b6d4" text-anchor="middle" font-weight="700">阶段二：Broker端</text>
+                <text x="400" y="85" font-size="9" fill="#94a3b8" text-anchor="middle">Broker宕机 / 磁盘损坏</text>
+                <text x="400" y="100" font-size="9" fill="#94a3b8" text-anchor="middle">副本未同步即切换Leader</text>
+                <text x="400" y="115" font-size="9" fill="#f87171" text-anchor="middle">丢失概率：低（配置正确时）</text>
+
+                <rect x="550" y="40" width="230" height="80" rx="6" fill="#0a0f1a" stroke="#8b5cf6" stroke-width="1.2"/>
+                <text x="665" y="65" font-size="11" fill="#8b5cf6" text-anchor="middle" font-weight="700">阶段三：消费端</text>
+                <text x="665" y="85" font-size="9" fill="#94a3b8" text-anchor="middle">先提交offset后处理，消费失败</text>
+                <text x="665" y="100" font-size="9" fill="#94a3b8" text-anchor="middle">自动提交+消费异常</text>
+                <text x="665" y="115" font-size="9" fill="#f87171" text-anchor="middle">丢失概率：高（代码bug）</text>
+
+                <!-- 箭头 -->
+                <line x1="250" y1="80" x2="290" y2="80" stroke="#475569" stroke-width="1.5" marker-end="url(#arr-rel)"/>
+                <line x1="510" y1="80" x2="550" y2="80" stroke="#475569" stroke-width="1.5" marker-end="url(#arr-rel)"/>
+
+                <!-- 底部标注 -->
+                <text x="410" y="160" font-size="10" fill="#f59e0b" text-anchor="middle" font-weight="600">面试核心原则：每个阶段都要有对应的保障措施，缺一不可</text>
+
+                <defs>
+                    <marker id="arr-rel" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                        <polygon points="0 0, 6 2.5, 0 5" fill="#475569"/>
+                    </marker>
+                </defs>
+            </svg>
+            <div class="diagram-caption">图6-1：消息丢失的三个阶段</div>
+        </div>
+
+        <h3>三大MQ 的可靠性保障方案</h3>
+
+        <h4>阶段一：生产端不丢消息</h4>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>保障措施</th>
+                        <th><span class="tag-kafka">Kafka</span></th>
+                        <th><span class="tag-rocketmq">RocketMQ</span></th>
+                        <th><span class="tag-pulsar">Pulsar</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>同步确认</strong></td>
+                        <td>acks=all，等ISR全部写入</td>
+                        <td>send()同步发送等待Broker确认</td>
+                        <td>producer.send().get() 同步等待</td>
+                    </tr>
+                    <tr>
+                        <td><strong>重试机制</strong></td>
+                        <td>retries=MAX + retry.backoff.ms</td>
+                        <td>retryTimesWhenSendFailed=3</td>
+                        <td>sendTimeout内自动重试</td>
+                    </tr>
+                    <tr>
+                        <td><strong>幂等发送</strong></td>
+                        <td>enable.idempotence=true（PID+SeqNum去重）</td>
+                        <td>无原生幂等（需业务去重）</td>
+                        <td>MessageDeduplication（Broker端）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>本地容灾</strong></td>
+                        <td colspan="3">发送失败时持久化到本地DB/文件，后台定时重发（通用方案）</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h4>阶段二：Broker端不丢消息</h4>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>保障措施</th>
+                        <th><span class="tag-kafka">Kafka</span></th>
+                        <th><span class="tag-rocketmq">RocketMQ</span></th>
+                        <th><span class="tag-pulsar">Pulsar</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>多副本</strong></td>
+                        <td>replication.factor=3</td>
+                        <td>SYNC_MASTER模式（同步双写）</td>
+                        <td>BookKeeper WQ=3, AQ=2</td>
+                    </tr>
+                    <tr>
+                        <td><strong>刷盘策略</strong></td>
+                        <td>默认PageCache异步刷盘</td>
+                        <td>SYNC_FLUSH同步刷盘 / ASYNC_FLUSH异步</td>
+                        <td>BookKeeper Journal fsync</td>
+                    </tr>
+                    <tr>
+                        <td><strong>选举安全</strong></td>
+                        <td>unclean.leader.election=false<br>min.insync.replicas=2</td>
+                        <td>DLedger Raft多数派写入</td>
+                        <td>BookKeeper Fencing机制</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h4>阶段三：消费端不丢消息</h4>
+
+        <div class="callout">
+            <div class="callout-title">Offset 提交时机：消费端最关键的设计决策</div>
+            <p>
+                <strong>先消费后提交（At-Least-Once）：</strong>处理完成后再 commit offset。
+                风险：处理成功但 commit 失败（如 Consumer 宕机），重启后会重复消费。需要消费端幂等保证。<br><br>
+                <strong>先提交后消费（At-Most-Once）：</strong>先 commit offset 再处理消息。
+                风险：commit 成功但处理失败，消息就丢了（offset 已推进，不会再重新投递）。<br><br>
+                <strong>Kafka 自动提交的陷阱：</strong><code>enable.auto.commit=true</code> 时，
+                Consumer 每 <code>auto.commit.interval.ms</code>（默认5秒）自动提交一次。
+                如果在自动提交后、下次 poll 之前 Consumer 宕机，期间已拉取但未处理的消息就丢了（At-Most-Once）。
+                反过来，如果在处理完成后、自动提交之前宕机，重启后会重复消费（At-Least-Once）。
+                自动提交的本质问题是：offset提交时机与业务处理完成时机不同步，
+                既不能保证At-Most-Once也不能保证At-Least-Once，取决于故障发生的时刻。
+                Rebalance 时更危险——Rebalance 会触发隐式提交，可能将未处理完的消息标记为已消费。<br><br>
+                <strong>生产建议：</strong>关闭自动提交，采用"批量处理 + 手动同步提交"模式。
+            </p>
+        </div>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>保障措施</th>
+                        <th><span class="tag-kafka">Kafka</span></th>
+                        <th><span class="tag-rocketmq">RocketMQ</span></th>
+                        <th><span class="tag-pulsar">Pulsar</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>手动提交</strong></td>
+                        <td>enable.auto.commit=false<br>处理完成后手动commitSync()</td>
+                        <td>消费成功后返回CONSUME_SUCCESS</td>
+                        <td>处理成功后consumer.acknowledge(msg)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>消费重试</strong></td>
+                        <td>自行实现（无原生重试）</td>
+                        <td>内建重试队列（%RETRY%）最多16次</td>
+                        <td>negativeAcknowledge触发重投</td>
+                    </tr>
+                    <tr>
+                        <td><strong>死信兜底</strong></td>
+                        <td>自行实现</td>
+                        <td>重试耗尽进入%DLQ%，人工处理</td>
+                        <td>内建Dead Letter Topic</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Kafka 高可靠配置最佳实践</h3>
+
+        <div class="callout">
+            <div class="callout-title">Kafka 持久性保证的三个必要条件（缺一不可）</div>
+            <p>
+                Kafka 只有在同时满足以下三个条件时才真正保证消息不丢失：<br>
+                ① <code>acks=all</code>（Producer等待所有ISR副本确认）<br>
+                ② <code>min.insync.replicas > 1</code>（防止ISR缩小到只有Leader时acks=all退化为acks=1）<br>
+                ③ <code>unclean.leader.election.enable=false</code>（禁止未同步的副本当选Leader）<br><br>
+                缺少任一条件都可能丢数据：只有acks=all但min.insync.replicas=1时，ISR可能缩小到只剩Leader，
+                此时"all"等价于"1"；有了前两条但允许unclean选举，则ISR全部宕机时一个落后副本可能当选并截断数据。
+            </p>
+        </div>
+
+        <pre data-lang="Java"><code>// ====== Producer 端 ======
+props.put("acks", "all");                         // 等ISR全部确认
+props.put("retries", Integer.MAX_VALUE);          // 无限重试
+props.put("enable.idempotence", true);            // 幂等去重
+props.put("max.in.flight.requests.per.connection", 5); // 幂等模式下最多5
+
+// ====== Broker 端（server.properties）======
+// replication.factor=3                           // 3副本
+// min.insync.replicas=2                          // ISR最少2个
+// unclean.leader.election.enable=false           // 禁止非ISR当选Leader
+// log.flush.interval.messages=1                  // 每条消息刷盘（极致可靠，牺牲性能）
+
+// ====== Consumer 端 ======
+props.put("enable.auto.commit", "false");         // 关闭自动提交
+
+while (true) {
+    ConsumerRecords&lt;String, String&gt; records = consumer.poll(Duration.ofMillis(200));
+    for (ConsumerRecord&lt;String, String&gt; record : records) {
+        try {
+            processMessage(record);                // 先处理
+        } catch (Exception e) {
+            // 处理失败：写入重试表 或 发到错误Topic
+            saveToRetryTable(record);
+        }
+    }
+    consumer.commitSync();                         // 后提交（处理完再确认）
+}</code></pre>
+
+        <div class="qa-block">
+            <div class="qa-question">即使用了 acks=all + 副本3 + min.insync.replicas=2，消息还可能丢吗？</div>
+            <div class="qa-answer">
+                可能！有三种极端情况：<br>
+                ①<strong>所有ISR节点同时宕机</strong>：物理机房断电，PageCache中未fsync的数据丢失。
+                解决方案：跨机房部署 或 配置 log.flush.interval.messages=1（性能会降到1/10）。<br>
+                ②<strong>unclean.leader.election.enable被误开</strong>：运维误配置，非ISR副本当选Leader，导致数据截断。<br>
+                ③<strong>Producer 设置了 buffer.memory 不够 + block 超时</strong>：消息在 Producer 缓冲区被丢弃（抛出BufferExhaustedException），
+                而业务代码未捕获异常。<br><br>
+                所以真正的"不丢消息"需要端到端设计：Producer异常捕获+本地持久化兜底，不能仅依赖MQ配置。
+            </div>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">RocketMQ 的同步刷盘（SYNC_FLUSH）和异步刷盘（ASYNC_FLUSH）怎么选？</div>
+            <div class="qa-answer">
+                <strong>同步刷盘：</strong>消息写入磁盘文件后才返回ACK给Producer。单机宕机0丢失。
+                但吞吐降到2-3万TPS，适合金融/支付场景（如银行转账通知）。<br><br>
+                <strong>异步刷盘 + 同步双写（SYNC_MASTER）：</strong>这是阿里推荐的"次优可靠"方案。
+                消息写入Master内存后同步复制到Slave，然后返回ACK。
+                即使Master宕机（PageCache数据丢失），Slave上仍有完整数据。
+                吞吐可达10万+ TPS，可靠性99.99%以上。<br><br>
+                <strong>极端场景注意：</strong>即使是 SYNC_FLUSH + SYNC_MASTER，如果 Master 和 Slave 同时断电
+                （如同机房同机架），且此时 PageCache 中有未 fsync 的数据（ASYNC_FLUSH 场景）或物理磁盘损坏，
+                仍可能丢失数据。真正的"零丢失"需要跨机房/跨AZ部署副本。<br><br>
+                <strong>阿里双11的实际配置：</strong>ASYNC_FLUSH + SYNC_MASTER（可靠性与性能的最佳平衡点）。
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- 第七章：高频考点 - 消息顺序性 -->
+    <!-- ============================================================ -->
+    <section class="chapter" id="ch7">
+        <div class="chapter-header">
+            <div class="chapter-number">Chapter 07</div>
+            <h2>高频考点：消息顺序性</h2>
+        </div>
+
+        <p>
+            <strong>"如何保证消息的顺序消费？"</strong>——这是面试第二高频题。
+            理解这个问题的关键是区分<strong>全局有序</strong>和<strong>分区有序（局部有序）</strong>。
+            99%的场景只需要"相同业务Key的消息有序"，而非全局有序。
+        </p>
+        <p>
+            <strong>全局有序的代价极大：</strong>全局有序意味着整个 Topic 只能有 1 个 Partition + 1 个 Consumer，
+            完全放弃并行能力，吞吐量退化为单线程水平。在 Kafka 中这意味着单 Partition 的写入上限就是系统上限。
+            绝大多数"我需要全局有序"的需求，经过仔细分析后都可以降级为"按业务Key分区有序"——
+            比如"所有订单消息有序"可以降级为"同一个订单的消息有序"。
+        </p>
+
+        <h3>顺序性分类</h3>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>类型</th>
+                        <th>含义</th>
+                        <th>实现代价</th>
+                        <th>实际需求场景</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>全局有序</strong></td>
+                        <td>所有消息严格按发送顺序消费</td>
+                        <td>极高（单Partition + 单Consumer）</td>
+                        <td>极少。如：Binlog同步到数据仓库</td>
+                    </tr>
+                    <tr>
+                        <td><strong>分区有序</strong></td>
+                        <td>相同Key的消息有序，不同Key之间无序</td>
+                        <td>低（Key路由到同一Partition）</td>
+                        <td>常见。如：同一订单的创建→支付→发货</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>三大MQ 的顺序保证方案</h3>
+
+        <h4><span class="tag-kafka">Kafka</span> 保证顺序</h4>
+        <ul>
+            <li><strong>生产端：</strong>指定相同 Key 的消息发到同一 Partition（通过 key.hashCode() % partitionCount）</li>
+            <li><strong>Broker端：</strong>单 Partition 内天然有序（追加写入，offset 单调递增）</li>
+            <li><strong>消费端：</strong>同一 Partition 只被 Consumer Group 内一个 Consumer 消费（天然串行）</li>
+            <li><strong>陷阱：</strong>开启重试（retries > 0）+ max.in.flight.requests > 1 时，
+                未开启幂等的情况下<strong>即使在单个 Partition 内也可能乱序</strong>
+                （第一个 batch 发送失败重试时，第二个 batch 可能先成功写入）。
+                解决方案：开启幂等（enable.idempotence=true），Kafka 利用 Sequence Number 保证同一 Partition 内
+                最多 5 个 in-flight 请求（max.in.flight.requests.per.connection ≤ 5）仍然有序。
+                若未开启幂等，则必须设置 max.in.flight.requests.per.connection=1 才能保证顺序。
+                原理：Broker 发现 Sequence 不连续时会拒绝写入（OutOfOrderSequenceException），
+                Producer 自动重排后重发，从而保证最终写入顺序与发送顺序一致</li>
+        </ul>
+
+        <h4><span class="tag-rocketmq">RocketMQ</span> 保证顺序</h4>
+        <ul>
+            <li><strong>生产端：</strong>使用 <code>MessageQueueSelector</code> 将同一订单ID路由到同一 MessageQueue。
+                实现原理：<code>send(msg, selector, arg)</code> 的第三个参数 arg 传入业务Key（如orderId），
+                selector 中用 <code>Math.abs(arg.hashCode()) % mqs.size()</code> 计算目标 Queue 索引。
+                同一个 arg 总是路由到同一 Queue，从而保证该 Key 的消息写入同一队列</li>
+            <li><strong>消费端：</strong>使用 <code>MessageListenerOrderly</code>（而非 MessageListenerConcurrently）</li>
+            <li><strong>原理：</strong>MessageListenerOrderly 会对 MessageQueue 加<strong>分布式锁</strong>（Broker端）和<strong>本地锁</strong>（Consumer端）：
+                Consumer 每20秒向 Broker 续锁（lockBatchMQ），确保同一时刻同一 Queue 只有一个 Consumer 在消费；
+                本地通过 <code>ProcessQueue</code> 的 consumeLock（ReentrantLock）保证单线程顺序处理该 Queue 的消息</li>
+            <li><strong>代价：</strong>消费吞吐降低（因为串行化），且某条消息消费失败会阻塞后续消息（Head-of-Line Blocking）。
+                RocketMQ 会自动暂停该 Queue 消费一定时间（<code>suspendCurrentQueueTimeMillis</code>，默认1秒）后重试</li>
+            <li><strong>Rebalance边界条件：</strong>当Consumer Group发生Rebalance时，Queue的分布式锁存在20秒续约窗口。
+                在锁转移期间可能出现短暂的"无锁消费"窗口（新Consumer还未获取锁、旧Consumer锁已过期），
+                极端情况下可能导致少量消息乱序或重复投递。生产中需在消费端额外保证幂等</li>
+        </ul>
+
+        <h4><span class="tag-pulsar">Pulsar</span> 保证顺序</h4>
+        <ul>
+            <li><strong>方案一：</strong>Exclusive 订阅模式 — 全局只有一个消费者，严格有序但无并行</li>
+            <li><strong>方案二：</strong>Key_Shared 订阅模式 — 相同Key固定路由到同一Consumer，兼顾顺序与并行</li>
+            <li><strong>优势：</strong>Key_Shared 比 Kafka 更灵活，不受 Partition 数量限制。
+                Kafka 中并行度上限=Partition数，而 Pulsar Key_Shared 的并行度=Consumer数</li>
+        </ul>
+
+        <h3>代码示例：RocketMQ 顺序消息</h3>
+
+        <pre data-lang="Java"><code>// === 生产端：同一订单发到同一 MessageQueue ===
+String orderId = "ORDER_20240101_001";
+List&lt;Message&gt; orderMessages = Arrays.asList(
+    new Message("order-topic", "create", orderId, "订单创建".getBytes()),
+    new Message("order-topic", "pay",    orderId, "订单支付".getBytes()),
+    new Message("order-topic", "ship",   orderId, "订单发货".getBytes())
+);
+
+for (Message msg : orderMessages) {
+    producer.send(msg, new MessageQueueSelector() {
+        @Override
+        public MessageQueue select(List&lt;MessageQueue&gt; mqs, Message msg, Object arg) {
+            String orderId = (String) arg;
+            int index = Math.abs(orderId.hashCode()) % mqs.size();
+            return mqs.get(index);  // 同一orderId总是选同一个Queue
+        }
+    }, orderId);
+}
+
+// === 消费端：使用 OrderlyListener 保证串行消费 ===
+consumer.registerMessageListener(new MessageListenerOrderly() {
+    @Override
+    public ConsumeOrderlyStatus consumeMessage(List&lt;MessageExt&gt; msgs, 
+                                                ConsumeOrderlyContext context) {
+        for (MessageExt msg : msgs) {
+            // 此处保证同一Queue的消息按顺序到达
+            System.out.println("顺序消费: " + new String(msg.getBody()));
+        }
+        return ConsumeOrderlyStatus.SUCCESS;
+        // 如果返回 SUSPEND_CURRENT_QUEUE_A_MOMENT，会暂停当前队列消费并稍后重试
+    }
+});</code></pre>
+
+        <h3>顺序消息的坑与最佳实践</h3>
+
+        <div class="callout">
+            <div class="callout-title">常见面试追问：顺序消息的消费失败怎么办？</div>
+            <p>
+                <strong>Kafka：</strong>失败后不提交offset，会阻塞该Partition后续所有消息。
+                通常做法是：失败消息写入"重试Topic"异步处理，主流程继续推进offset。<br><br>
+                <strong>RocketMQ：</strong>OrderlyListener 返回 SUSPEND 会暂停当前Queue消费（默认1秒后重试）。
+                如果一直失败，该Queue的消息会持续堆积。生产中通常设置最大重试次数，超出后发到死信队列。<br><br>
+                <strong>核心矛盾：</strong>顺序消费 vs 可用性 是天然冲突的。
+                严格顺序意味着一条消息的失败会阻塞整条流水线（Head-of-Line Blocking）。
+                面试中要能分析这个 trade-off。
+            </p>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">Kafka Partition 数量变化后，之前按Key路由的顺序还能保证吗？</div>
+            <div class="qa-answer">
+                <strong>不能！</strong>Partition 扩容后，key.hashCode() % newPartitionCount 的结果可能变化，
+                同一 Key 的消息可能被路由到不同的 Partition。这是 Kafka 顺序消息的"隐形炸弹"。<br><br>
+                解决方案：①建Topic时预估好Partition数，尽量不扩容；
+                ②如果必须扩容，在扩容期间暂停相关Producer，等存量消息消费完毕后再切换路由逻辑；
+                ③使用自定义Partitioner，基于一致性哈希减少Key重映射的比例。
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- 第八章：高频考点 - 消息重复与幂等 -->
+    <!-- ============================================================ -->
+    <section class="chapter" id="ch8">
+        <div class="chapter-header">
+            <div class="chapter-number">Chapter 08</div>
+            <h2>高频考点：消息重复与幂等</h2>
+        </div>
+
+        <p>
+            在分布式系统中，消息投递语义有三种：<strong>At-Most-Once（最多一次）、At-Least-Once（至少一次）、Exactly-Once（恰好一次）</strong>。
+            现实中，At-Least-Once + 消费端幂等 是最主流的工程实践。
+            所谓"MQ 保证 Exactly-Once"大多是在特定场景下的近似实现。
+        </p>
+
+        <h3>三种投递语义</h3>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>投递语义</th>
+                        <th>含义</th>
+                        <th>可能的问题</th>
+                        <th>适用场景</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>At-Most-Once</strong></td>
+                        <td>消息最多投递一次，可能丢失</td>
+                        <td>数据丢失</td>
+                        <td>日志监控（丢几条无所谓）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>At-Least-Once</strong></td>
+                        <td>消息至少投递一次，可能重复</td>
+                        <td>重复消费</td>
+                        <td>大多数业务场景（配合幂等）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Exactly-Once</strong></td>
+                        <td>消息恰好被处理一次（效果等价），不丢不重</td>
+                        <td>分布式系统中真正的 Exactly-Once Delivery 理论上不可能（无法区分慢响应与故障）。
+                            实践中通过幂等生产+事务性写入+幂等消费实现"Effectively-Once"效果</td>
+                        <td>Kafka Streams 内部闭环、金融计费（需配合业务幂等）</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>为什么消息会重复？</h3>
+
+        <ul>
+            <li><strong>生产端重复：</strong>Producer 发送成功但未收到ACK（网络超时），触发重试导致重复发送</li>
+            <li><strong>消费端重复：</strong>Consumer 消费成功但提交offset失败（如宕机），重启后从旧offset开始消费导致重复</li>
+            <li><strong>Rebalance重复：</strong>Consumer Group 发生重平衡，已消费但未提交的消息被重新分配给其他Consumer</li>
+        </ul>
+
+        <h3>三大MQ 的去重/幂等方案</h3>
+
+        <h4><span class="tag-kafka">Kafka</span> 幂等与事务</h4>
+        <p><strong>Producer 幂等（单分区内去重，Kafka 0.11+ 引入，3.0+ 默认开启）：</strong></p>
+        <ul>
+            <li>开启 <code>enable.idempotence=true</code>（Kafka 3.0+ 默认 true）</li>
+            <li>原理：每个 Producer 分配唯一 PID（Producer ID），每条消息带 Sequence Number</li>
+            <li>Broker 维护 &lt;PID, Partition&gt; → 最近5个 batch 的 Sequence Number 映射，重复序号直接丢弃</li>
+            <li>限制：只保证单 Producer、单 Partition、单 Session 的幂等。Producer 重启后 PID 变化（需配合 transactional.id 持久化跨 Session 的状态）</li>
+        </ul>
+        <p><strong>Kafka Transactions（跨分区 Exactly-Once，Kafka 0.11+ 引入）：</strong></p>
+        <ul>
+            <li>设置 <code>transactional.id</code>，Producer 重启后可通过此 ID 恢复事务状态（从 Transaction Coordinator 获取）</li>
+            <li>事务协调器（Transaction Coordinator）：每个 transactional.id 映射到 <code>__transaction_state</code> topic 的特定 Partition，由该 Partition 的 Leader Broker 担任协调器</li>
+            <li>配合 Consumer 的 <code>isolation.level=read_committed</code> 实现端到端 Exactly-Once（Consumer 只读已 commit 的消息，过滤 abort 的消息）</li>
+            <li>典型场景：Kafka Streams 内部使用（consume-process-produce 模式）、Flink Kafka Sink 的 TwoPhaseCommitSinkFunction</li>
+            <li>性能开销：约增加 20-30% 延迟（事务控制消息 + 两阶段提交），吞吐量下降约 3-5%</li>
+        </ul>
+
+        <h4><span class="tag-rocketmq">RocketMQ</span> 幂等</h4>
+        <p>
+            RocketMQ <strong>不提供 Producer 端的原生幂等</strong>，消息去重完全依赖业务端。
+            推荐方案：
+        </p>
+        <ul>
+            <li>生产端：为每条消息设置唯一业务 Key（如 orderId + 操作类型）</li>
+            <li>消费端：消费前检查去重表（Redis / 数据库唯一索引）</li>
+        </ul>
+
+        <h4><span class="tag-pulsar">Pulsar</span> 幂等</h4>
+        <ul>
+            <li>Broker 端消息去重：开启 <code>brokerDeduplicationEnabled=true</code></li>
+            <li>原理：基于 Producer Name + Sequence ID 去重（类似 Kafka 的 PID + SeqNum）</li>
+            <li>支持跨 Session 去重（Producer Name 固定时）</li>
+        </ul>
+
+        <h3>消费端幂等的工程实践</h3>
+
+        <pre data-lang="Java"><code>// ====== 方案一：Redis 去重（适合高并发场景）======
+public boolean consumeWithIdempotent(MessageExt msg) {
+    String msgKey = msg.getKeys(); // 如: "ORDER_PAY_20240101001"
+    
+    // SETNX: 如果key不存在则设置成功返回true，已存在返回false
+    Boolean isFirstTime = redisTemplate.opsForValue()
+        .setIfAbsent("mq:dedup:" + msgKey, "1", 24, TimeUnit.HOURS);
+    
+    if (Boolean.FALSE.equals(isFirstTime)) {
+        log.warn("重复消息，跳过处理: key={}", msgKey);
+        return true; // 已处理过，直接返回成功
+    }
+    
+    try {
+        // 执行业务逻辑
+        processBusinessLogic(msg);
+        return true;
+    } catch (Exception e) {
+        // 处理失败，删除Redis key，允许后续重试
+        redisTemplate.delete("mq:dedup:" + msgKey);
+        return false;
+    }
+}
+
+// ====== 方案二：数据库唯一索引（适合强一致场景）======
+@Transactional
+public void consumeWithDbDedup(MessageExt msg) {
+    String msgKey = msg.getKeys();
+    
+    // 利用唯一索引做去重（INSERT会因唯一冲突失败）
+    try {
+        // 消费记录表: CREATE UNIQUE INDEX uk_msg_key ON consume_record(msg_key)
+        consumeRecordMapper.insert(new ConsumeRecord(msgKey, LocalDateTime.now()));
+    } catch (DuplicateKeyException e) {
+        log.info("重复消息（数据库去重），跳过: key={}", msgKey);
+        return; // 已处理过
+    }
+    
+    // 在同一事务中执行业务逻辑
+    orderService.processPayment(JSON.parseObject(new String(msg.getBody()), PaymentDTO.class));
+}
+
+// ====== 方案三：状态机去重（适合有状态流转的业务）======
+public void consumeOrderEvent(MessageExt msg) {
+    OrderEvent event = JSON.parseObject(msg.getBody(), OrderEvent.class);
+    
+    // 数据库乐观锁：UPDATE orders SET status='PAID' WHERE id=? AND status='CREATED'
+    int affected = orderMapper.updateStatus(event.getOrderId(), 
+                                            event.getFromStatus(),  // 前置状态
+                                            event.getToStatus());   // 目标状态
+    if (affected == 0) {
+        // 状态不匹配 → 要么已处理过（幂等），要么状态不对（异常）
+        log.info("状态流转失败（可能是重复消费）: orderId={}", event.getOrderId());
+    }
+}</code></pre>
+
+        <div class="callout">
+            <div class="callout-title">面试加分点：三种去重方案的选择原则</div>
+            <p>
+                <strong>Redis去重：</strong>性能最高（μs级），但有Redis宕机丢key的风险，适合允许极小概率重复的场景。<br>
+                <strong>DB唯一索引：</strong>强一致性保证，但引入DB调用开销，适合金融/支付场景。<br>
+                <strong>状态机：</strong>最优雅的业务幂等方案，利用业务状态本身做天然去重，无额外存储开销。
+                条件：业务必须有明确的状态流转模型。
+            </p>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">Kafka 的 Exactly-Once 语义是真正的"恰好一次"吗？有什么限制？</div>
+            <div class="qa-answer">
+                严格来说，Kafka 的 Exactly-Once（EOS）有明确的适用范围和演进历史：<br><br>
+                <strong>Kafka 0.11（2017）引入 EOS：</strong>Idempotent Producer + Transactional API<br>
+                <strong>Kafka 2.5（2020）：</strong>改进事务恢复性能，减少事务协调器failover时间<br>
+                <strong>Kafka 3.0（2021）：</strong>默认开启幂等（enable.idempotence=true），EOS 成为默认行为<br><br>
+                EOS 的三个层次：<br>
+                ①<strong>Producer幂等</strong>：只保证单Producer单Partition单Session内不重复，Producer重启后PID变化，不保证跨Session；<br>
+                ②<strong>Kafka Transactions</strong>：保证 consume-transform-produce 链路的原子性，
+                但仅限于"从Kafka读 → 处理 → 写回Kafka"的闭环场景（如Kafka Streams、Flink Exactly-Once Sink）；<br>
+                ③<strong>不覆盖外部系统</strong>：如果消费后要写数据库/调用HTTP/写Redis，Kafka事务管不到外部系统，
+                仍然需要业务端幂等。Kafka Transaction 的 commit 只保证"Kafka内部的 offset 和消息写入原子"。<br><br>
+                <strong>结论：</strong>Kafka 的 Exactly-Once 更准确的称呼是"Effectively-Once"——
+                通过幂等生产者（防止 Producer-to-Broker 重复）和事务（保证多分区写入+offset提交原子性）
+                实现"效果等价于恰好一次"，而非真正的"恰好投递一次"。
+                在分布式系统中，你无法区分"消息发送后对方处理很慢"和"消息丢失"（这是两将军问题的本质），
+                因此真正的 Exactly-Once Delivery 理论上不可能——只有 Exactly-Once Processing（通过幂等实现）。
+                端到端的不重不丢永远需要业务配合（幂等消费+去重表）。
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- 第九章：高频考点 - 事务消息 -->
+    <!-- ============================================================ -->
+    <section class="chapter" id="ch9">
+        <div class="chapter-header">
+            <div class="chapter-number">Chapter 09</div>
+            <h2>高频考点：事务消息</h2>
+        </div>
+
+        <p>
+            事务消息解决的核心问题是：<strong>如何保证"本地事务"和"消息发送"的原子性</strong>？
+            即：要么本地事务成功且消息发出，要么本地事务回滚且消息不发。
+            这是分布式事务的一种轻量级解决方案，比 2PC/3PC 简单得多。
+        </p>
+
+        <h3>经典场景：下单扣库存</h3>
+        <p>
+            用户下单时，订单服务需要：①创建订单（本地数据库操作）；②发消息通知库存服务扣减库存。
+            如果先写DB成功但消息发送失败 → 超卖。如果先发消息成功但DB写入失败 → 库存被多扣。
+            事务消息就是解决这个"两个操作要么都成功要么都失败"的问题。
+        </p>
+
+        <h3>RocketMQ 事务消息（最经典的实现）</h3>
+
+        <p>
+            <strong>事务消息的内部实现机制：</strong>Producer 发送的 Half Message 并不会直接写入目标 Topic 的 ConsumeQueue，
+            而是被 Broker 替换 Topic 为内部系统 Topic <code>RMQ_SYS_TRANS_HALF_TOPIC</code>，
+            同时将原始 Topic 和 QueueId 保存在消息属性中。因此 Consumer 无法消费到半消息。
+            当 Producer 确认 Commit 时，Broker 从 Half Topic 读出消息，恢复原始 Topic，重新投递到目标 ConsumeQueue。
+            回查机制：Broker 有后台线程（TransactionalMessageCheckService）定期扫描 Half Topic 中超过指定时间（默认60秒）
+            未收到二次确认的消息，向 Producer Group 中任意存活实例发起回查（checkLocalTransaction）。
+            回查最多执行 15 次（可配置 transactionCheckMax），超过后默认回滚。
+        </p>
+
+        <div class="diagram">
+            <svg width="820" height="350" viewBox="0 0 820 350" xmlns="http://www.w3.org/2000/svg">
+                <!-- Producer -->
+                <rect x="30" y="50" width="140" height="250" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5"/>
+                <text x="100" y="75" font-size="11" fill="#f59e0b" text-anchor="middle" font-weight="600">Producer</text>
+                <text x="100" y="93" font-size="9" fill="#64748b" text-anchor="middle">(订单服务)</text>
+
+                <!-- Broker -->
+                <rect x="330" y="50" width="180" height="250" rx="6" fill="#0a1f2e" stroke="#06b6d4" stroke-width="1.5"/>
+                <text x="420" y="75" font-size="11" fill="#06b6d4" text-anchor="middle" font-weight="600">RocketMQ Broker</text>
+
+                <!-- Consumer -->
+                <rect x="650" y="50" width="140" height="250" rx="6" fill="#1e293b" stroke="#10b981" stroke-width="1.5"/>
+                <text x="720" y="75" font-size="11" fill="#10b981" text-anchor="middle" font-weight="600">Consumer</text>
+                <text x="720" y="93" font-size="9" fill="#64748b" text-anchor="middle">(库存服务)</text>
+
+                <!-- 步骤 1: 发送半消息 -->
+                <line x1="170" y1="120" x2="330" y2="120" stroke="#f59e0b" stroke-width="1.2" marker-end="url(#arr-tx)"/>
+                <text x="250" y="112" font-size="9" fill="#f59e0b" text-anchor="middle" font-weight="600">① 发送半消息</text>
+                <text x="250" y="126" font-size="8" fill="#94a3b8" text-anchor="middle">(Half Message)</text>
+
+                <!-- Broker 存储半消息 -->
+                <rect x="350" y="105" width="140" height="25" rx="3" fill="#0d2935" stroke="#0891b2" stroke-width="0.5"/>
+                <text x="420" y="121" font-size="8" fill="#67e8f9" text-anchor="middle">存入半消息Topic(不可见)</text>
+
+                <!-- 步骤 2: 返回OK -->
+                <line x1="330" y1="145" x2="170" y2="145" stroke="#06b6d4" stroke-width="1" stroke-dasharray="3" marker-end="url(#arr-tx2)"/>
+                <text x="250" y="142" font-size="8" fill="#06b6d4" text-anchor="middle">② 返回发送成功</text>
+
+                <!-- 步骤 3: 执行本地事务 -->
+                <rect x="50" y="160" width="100" height="35" rx="3" fill="#1a2332" stroke="#f59e0b" stroke-width="0.8"/>
+                <text x="100" y="176" font-size="8" fill="#f59e0b" text-anchor="middle" font-weight="600">③ 执行本地事务</text>
+                <text x="100" y="189" font-size="7" fill="#94a3b8" text-anchor="middle">INSERT订单到DB</text>
+
+                <!-- 步骤 4: 提交/回滚 -->
+                <line x1="170" y1="210" x2="330" y2="210" stroke="#10b981" stroke-width="1.2" marker-end="url(#arr-tx)"/>
+                <text x="250" y="202" font-size="9" fill="#10b981" text-anchor="middle" font-weight="600">④ Commit / Rollback</text>
+                <text x="250" y="218" font-size="8" fill="#94a3b8" text-anchor="middle">(本地事务成功→Commit)</text>
+
+                <!-- 步骤 5: 消息可见 -->
+                <rect x="350" y="225" width="140" height="25" rx="3" fill="#0d3520" stroke="#10b981" stroke-width="0.5"/>
+                <text x="420" y="241" font-size="8" fill="#6ee7b7" text-anchor="middle">Commit→消息变为可见</text>
+
+                <!-- 步骤 6: 投递给Consumer -->
+                <line x1="510" y1="237" x2="650" y2="237" stroke="#10b981" stroke-width="1.2" marker-end="url(#arr-tx3)"/>
+                <text x="580" y="230" font-size="9" fill="#10b981" text-anchor="middle" font-weight="600">⑥ 投递消息</text>
+
+                <!-- 步骤 5b: 回查机制 -->
+                <line x1="330" y1="280" x2="170" y2="280" stroke="#f87171" stroke-width="1" stroke-dasharray="4" marker-end="url(#arr-tx2)"/>
+                <text x="250" y="273" font-size="9" fill="#f87171" text-anchor="middle" font-weight="600">⑤ 事务回查</text>
+                <text x="250" y="290" font-size="8" fill="#94a3b8" text-anchor="middle">(超时未收到④时触发)</text>
+
+                <!-- 底部说明 -->
+                <text x="420" y="330" font-size="9" fill="#64748b" text-anchor="middle">半消息对Consumer不可见 · Broker定时(默认60s)检查未决事务 · 回查最多15次</text>
+
+                <defs>
+                    <marker id="arr-tx" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                        <polygon points="0 0, 6 2.5, 0 5" fill="#f59e0b"/>
+                    </marker>
+                    <marker id="arr-tx2" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                        <polygon points="0 0, 6 2.5, 0 5" fill="#06b6d4"/>
+                    </marker>
+                    <marker id="arr-tx3" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                        <polygon points="0 0, 6 2.5, 0 5" fill="#10b981"/>
+                    </marker>
+                </defs>
+            </svg>
+            <div class="diagram-caption">图9-1：RocketMQ 事务消息流程 — 半消息 + 二阶段提交 + 事务回查</div>
+        </div>
+
+        <h3>Kafka 事务 vs RocketMQ 事务 — 本质区别</h3>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>对比项</th>
+                        <th><span class="tag-kafka">Kafka Transactions</span></th>
+                        <th><span class="tag-rocketmq">RocketMQ 事务消息</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>设计目标</strong></td>
+                        <td>流处理的 Exactly-Once（consume-transform-produce）</td>
+                        <td>保证本地事务与消息发送的原子性</td>
+                    </tr>
+                    <tr>
+                        <td><strong>事务边界</strong></td>
+                        <td>多个Topic/Partition的写入 + offset提交 的原子性</td>
+                        <td>单条消息发送 + 本地DB操作 的原子性</td>
+                    </tr>
+                    <tr>
+                        <td><strong>是否涉及外部系统</strong></td>
+                        <td>否（只在Kafka内部闭环）</td>
+                        <td>是（协调本地DB事务）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>回查机制</strong></td>
+                        <td>无（事务超时直接abort）</td>
+                        <td>有（Broker回查Producer的本地事务状态）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>典型使用者</strong></td>
+                        <td>Kafka Streams / Flink Kafka Connector</td>
+                        <td>业务开发者（订单/支付/积分等场景）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>性能开销</strong></td>
+                        <td>较高（事务协调器 + 额外的control消息）</td>
+                        <td>中等（半消息存储 + 回查线程）</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Kafka 事务代码示例</h3>
+
+        <pre data-lang="Java"><code>// Kafka 事务：典型的 consume-transform-produce 模式
+Properties props = new Properties();
+props.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "order-processor-001"); // 事务ID
+props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+
+KafkaProducer&lt;String, String&gt; producer = new KafkaProducer&lt;&gt;(props);
+producer.initTransactions(); // 初始化事务
+
+KafkaConsumer&lt;String, String&gt; consumer = createConsumer("read_committed");
+
+while (true) {
+    ConsumerRecords&lt;String, String&gt; records = consumer.poll(Duration.ofMillis(200));
+    
+    producer.beginTransaction(); // 开始事务
+    try {
+        for (ConsumerRecord&lt;String, String&gt; record : records) {
+            // 转换处理
+            String enrichedValue = transform(record.value());
+            
+            // 写入目标Topic（事务内）
+            producer.send(new ProducerRecord&lt;&gt;("enriched-orders", record.key(), enrichedValue));
+        }
+        
+        // 将消费offset也纳入事务提交
+        producer.sendOffsetsToTransaction(
+            getOffsets(records), consumer.groupMetadata());
+        
+        producer.commitTransaction(); // 原子提交：消息写入 + offset提交
+    } catch (Exception e) {
+        producer.abortTransaction(); // 原子回滚
+    }
+}</code></pre>
+
+        <div class="qa-block">
+            <div class="qa-question">RocketMQ 事务消息有什么局限性？实际使用中有哪些坑？</div>
+            <div class="qa-answer">
+                五个主要局限：<br>
+                ①<strong>不支持批量事务</strong>：每次 sendMessageInTransaction 只能发一条消息，无法在一个事务中发多条；<br>
+                ②<strong>回查依赖Producer存活</strong>：如果Producer整个服务下线，回查无法到达，事务将一直悬挂（需要超时策略）；<br>
+                ③<strong>不支持延迟+事务组合</strong>：事务消息不能同时是延迟消息；<br>
+                ④<strong>事务消息不支持Tag过滤</strong>：事务消息会被存到特殊的Half Topic，Tag信息在提交前不可用；<br>
+                ⑤<strong>回查幂等问题</strong>：回查可能多次触发，checkLocalTransaction 必须能幂等地查询本地事务状态。<br><br>
+                <strong>生产实践建议：</strong>本地事务表记录事务状态（orderId → status），回查时直接查表返回。
+            </div>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">不用MQ事务消息，还有什么方案能保证"本地事务+消息发送"的一致性？</div>
+            <div class="qa-answer">
+                <strong>本地消息表（Transactional Outbox Pattern）：</strong><br>
+                ①业务操作和"写消息表"在同一个本地事务中（同一DB）；<br>
+                ②后台线程/定时任务扫描消息表，将未发送的消息投递到MQ；<br>
+                ③发送成功后更新消息表状态为"已发送"。<br><br>
+                优势：不依赖MQ的事务能力，任何MQ都适用。Debezium CDC + Kafka 的 Outbox 模式就是这个思路的工业级实现。<br><br>
+                <strong>对比：</strong>RocketMQ事务消息 = MQ层面的解决方案（侵入MQ）；
+                本地消息表 = 应用层面的解决方案（侵入DB）。二者各有优劣。
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- 第十章：高频考点 - 延迟消息与死信队列 -->
+    <!-- ============================================================ -->
+    <section class="chapter" id="ch10">
+        <div class="chapter-header">
+            <div class="chapter-number">Chapter 10</div>
+            <h2>高频考点：延迟消息与死信队列</h2>
+        </div>
+
+        <h3>延迟消息</h3>
+
+        <p>
+            延迟消息（Delayed Message）是指消息发送后不会立即被消费者收到，
+            而是在指定时间后才变为可消费状态。典型场景：
+        </p>
+        <ul>
+            <li><strong>订单超时关闭：</strong>下单后30分钟未支付则自动取消</li>
+            <li><strong>会议提醒：</strong>会议开始前15分钟发送通知</li>
+            <li><strong>延迟重试：</strong>消费失败后间隔一段时间重新投递</li>
+        </ul>
+
+        <h4>三大MQ 延迟消息对比</h4>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>对比项</th>
+                        <th><span class="tag-kafka">Kafka</span></th>
+                        <th><span class="tag-rocketmq">RocketMQ</span></th>
+                        <th><span class="tag-pulsar">Pulsar</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>原生支持</strong></td>
+                        <td>不支持</td>
+                        <td>支持</td>
+                        <td>支持</td>
+                    </tr>
+                    <tr>
+                        <td><strong>延迟精度</strong></td>
+                        <td>—</td>
+                        <td>4.x: 18个固定级别(1s~2h)<br>5.x: 任意时间(秒级精度,最长24h)</td>
+                        <td>任意精度(deliverAfter/deliverAt)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>实现原理</strong></td>
+                        <td>—</td>
+                        <td>4.x: 延迟级别映射到内部Topic<br>5.x: 时间轮(TimerWheel)</td>
+                        <td>Delayed Message Tracker + 优先级队列</td>
+                    </tr>
+                    <tr>
+                        <td><strong>替代方案</strong></td>
+                        <td>外部调度（如 Redis ZSet + 定时扫描）</td>
+                        <td>—</td>
+                        <td>—</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h4>RocketMQ 4.x 延迟级别</h4>
+        <pre data-lang="Config"><code>// messageDelayLevel 配置（18个级别）
+// 1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h
+// 对应 delayLevel: 1  2  3   4   5  6  7  8  9  10 11 12 13 14  15  16  17 18
+
+Message msg = new Message("order-timeout", "订单超时检查".getBytes());
+msg.setDelayTimeLevel(16); // 第16级 = 30分钟后投递
+producer.send(msg);</code></pre>
+
+        <h4>RocketMQ 延迟消息原理（4.x 版本）</h4>
+        <p>
+            RocketMQ 将延迟消息先投递到内部的 <code>SCHEDULE_TOPIC_XXXX</code> Topic（有18个Queue，对应18个级别）。
+            每个级别有一个定时任务（ScheduleMessageService），每隔一定间隔检查到期的消息，
+            将到期消息从 SCHEDULE_TOPIC 转投到原始目标 Topic，此时消费者才能看到。
+        </p>
+        <p>
+            <strong>RocketMQ 5.x 任意精度定时消息：</strong>5.0 引入了基于<strong>时间轮（TimerWheel）+ TimerLog</strong>的实现，
+            支持任意时间精度的定时/延迟投递（精确到秒级）。实现原理：消息先写入 TimerLog，
+            时间轮按秒为刻度前进，到期时将消息从 TimerLog 转投到目标 Topic。
+            使用方式：<code>msg.setDeliverTimeMs(System.currentTimeMillis() + delayMs)</code>，不再受限于18个固定级别。
+            注意：定时消息最长支持未来24小时内投递（可配置 <code>timerMaxDelaySec</code>），超过范围的消息会被拒绝。
+        </p>
+
+        <h4>Kafka 实现延迟消息的替代方案</h4>
+        <pre data-lang="Java"><code>// 方案一：Redis ZSet + 定时任务（推荐）
+public void sendDelayedMessage(String topic, String message, long delayMs) {
+    long deliverTime = System.currentTimeMillis() + delayMs;
+    // 用投递时间作为score存入ZSet
+    redisTemplate.opsForZSet().add("delayed:messages:" + topic, message, deliverTime);
+}
+
+// 定时任务扫描到期消息
+@Scheduled(fixedRate = 1000) // 每秒扫描
+public void pollDelayedMessages() {
+    long now = System.currentTimeMillis();
+    Set&lt;String&gt; dueMessages = redisTemplate.opsForZSet()
+        .rangeByScore("delayed:messages:order-timeout", 0, now);
+    
+    for (String msg : dueMessages) {
+        kafkaProducer.send(new ProducerRecord&lt;&gt;("order-timeout", msg));
+        redisTemplate.opsForZSet().remove("delayed:messages:order-timeout", msg);
+    }
+}
+
+// 方案二：多级Topic延迟（类似RocketMQ思路）
+// delay-5s-topic → delay-30s-topic → delay-5m-topic → target-topic
+// 每级Topic有独立Consumer，到期后转投下一级或目标Topic</code></pre>
+
+        <h3>死信队列（Dead Letter Queue）</h3>
+
+        <p>
+            死信队列是消息的"最后归宿"——当消息经过多次重试仍然消费失败时，
+            将其转移到一个特殊队列，避免阻塞正常消费流程。运维人员可以后续排查处理。
+        </p>
+
+        <h4>三大MQ 死信机制对比</h4>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>对比项</th>
+                        <th><span class="tag-kafka">Kafka</span></th>
+                        <th><span class="tag-rocketmq">RocketMQ</span></th>
+                        <th><span class="tag-pulsar">Pulsar</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>原生支持</strong></td>
+                        <td>不支持（需自行实现）</td>
+                        <td>内建</td>
+                        <td>内建</td>
+                    </tr>
+                    <tr>
+                        <td><strong>死信Topic命名</strong></td>
+                        <td>自定义（如 xxx.DLT）</td>
+                        <td>%DLQ%ConsumerGroup</td>
+                        <td>topic-subscription-DLQ</td>
+                    </tr>
+                    <tr>
+                        <td><strong>触发条件</strong></td>
+                        <td>自定义重试次数</td>
+                        <td>重试16次后进入DLQ</td>
+                        <td>配置 deadLetterPolicy maxRedeliverCount</td>
+                    </tr>
+                    <tr>
+                        <td><strong>重试间隔</strong></td>
+                        <td>自定义</td>
+                        <td>递增（10s→30s→1m→...→2h）</td>
+                        <td>配置 negativeAckRedeliveryDelay</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h4>RocketMQ 重试与死信流程</h4>
+        <pre data-lang="Text"><code>消费失败 → 第1次重试(10s后) → 第2次(30s) → 第3次(1m) → ... → 第16次(2h后)
+                                                                                    ↓
+                                                                            进入死信队列
+                                                                      %DLQ%ConsumerGroupName
+                                                                                    ↓
+                                                                        人工排查 / 补偿处理</code></pre>
+
+        <div class="qa-block">
+            <div class="qa-question">订单30分钟超时关闭，用延迟消息和定时任务扫表两种方案各有什么优劣？</div>
+            <div class="qa-answer">
+                <strong>延迟消息方案：</strong><br>
+                优势：实时性好（精确到秒级），无需定时扫描，不会给DB带来压力。<br>
+                劣势：依赖MQ的延迟消息能力（Kafka不支持），且延迟期间如果订单已支付，消息到达时需要额外判断。<br><br>
+                <strong>定时任务扫表方案：</strong><br>
+                优势：不依赖MQ特性，逻辑简单可控，任何MQ都适用。<br>
+                劣势：定时任务有扫描间隔（如1分钟扫一次），精度不如延迟消息；数据量大时DB压力高。<br><br>
+                <strong>生产最佳实践：</strong>大厂通常用延迟消息（阿里用RocketMQ延迟消息），
+                但消费端仍需做幂等判断（订单可能已被用户支付），收到延迟消息时需检查订单当前状态。
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- 第十一章：高频考点 - 消费模型与重平衡 -->
+    <!-- ============================================================ -->
+    <section class="chapter" id="ch11">
+        <div class="chapter-header">
+            <div class="chapter-number">Chapter 11</div>
+            <h2>高频考点：消费模型与重平衡</h2>
+        </div>
+
+        <p>
+            消费模型和 Rebalance（重平衡）是面试中考查"你是否真正在生产中使用过MQ"的试金石。
+            理论背得再熟，没踩过 Rebalance 的坑都算不上"深度使用"。
+        </p>
+
+        <h3>Pull vs Push 模型</h3>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>模型</th>
+                        <th>原理</th>
+                        <th>优势</th>
+                        <th>劣势</th>
+                        <th>谁在用</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Pull（拉）</strong></td>
+                        <td>Consumer主动向Broker拉取消息</td>
+                        <td>消费者控制速率，不会被压垮；批量拉取效率高</td>
+                        <td>拉取间隔导致延迟；空拉浪费资源</td>
+                        <td>Kafka, RocketMQ</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Push（推）</strong></td>
+                        <td>Broker主动推送消息给Consumer</td>
+                        <td>实时性好，消息即到即推</td>
+                        <td>Broker需维护消费者状态；易压垮消费者</td>
+                        <td>RabbitMQ</td>
+                    </tr>
+                    <tr>
+                        <td><strong>长轮询</strong></td>
+                        <td>Pull请求挂起，有消息时立即返回</td>
+                        <td>兼顾Pull的可控性和Push的实时性</td>
+                        <td>实现稍复杂</td>
+                        <td>RocketMQ（默认模式）</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="callout">
+            <div class="callout-title">RocketMQ 的 "Push" 是假 Push</div>
+            <p>
+                RocketMQ 的 DefaultMQPushConsumer 虽然叫"Push"，但底层其实是<strong>长轮询 Pull</strong>。
+                Consumer 发起 Pull 请求，如果 Broker 暂时没有消息，请求会被挂起（hold住）最多15秒，
+                期间如果有新消息到达，Broker 立即唤醒并返回。这样既避免了空拉浪费，又近似实时。
+            </p>
+        </div>
+
+        <h3>Kafka Consumer Group Rebalance</h3>
+
+        <h4>什么时候触发 Rebalance？</h4>
+        <ul>
+            <li>Consumer 加入/退出 Group（如：新实例部署、实例宕机、主动 unsubscribe）</li>
+            <li>Consumer 被判定为死亡（超过 <code>session.timeout.ms</code> 未发心跳）</li>
+            <li>Consumer 两次 poll() 间隔超过 <code>max.poll.interval.ms</code>（消费太慢被踢出）</li>
+            <li>Topic 的 Partition 数量发生变化</li>
+            <li>订阅的 Topic 列表发生变化</li>
+        </ul>
+
+        <h4>Rebalance 的危害</h4>
+        <ul>
+            <li><strong>STW（Stop-The-World）：</strong>Rebalance 期间整个 Consumer Group 暂停消费（Kafka旧协议）</li>
+            <li><strong>重复消费：</strong>未提交的 offset 在 Rebalance 后被重新分配，导致消息被重复处理</li>
+            <li><strong>消费延迟飙升：</strong>大量 Partition 重新分配，冷启动缓存失效</li>
+            <li><strong>频繁触发恶性循环：</strong>消费慢 → 被踢出 → Rebalance → 更慢 → 再被踢出</li>
+        </ul>
+
+        <h4>Kafka Rebalance 策略</h4>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>策略</th>
+                        <th>原理</th>
+                        <th>优缺点</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>RangeAssignor</strong></td>
+                        <td>按Topic维度，Partition连续分配给Consumer</td>
+                        <td>简单，但多Topic时可能不均</td>
+                    </tr>
+                    <tr>
+                        <td><strong>RoundRobinAssignor</strong></td>
+                        <td>所有Partition轮询分配</td>
+                        <td>更均匀，但每次Rebalance变动大</td>
+                    </tr>
+                    <tr>
+                        <td><strong>StickyAssignor</strong></td>
+                        <td>尽量保持上次分配不变，最小化迁移</td>
+                        <td>推荐！减少Rebalance影响</td>
+                    </tr>
+                    <tr>
+                        <td><strong>CooperativeStickyAssignor</strong></td>
+                        <td>增量式Rebalance，不需要全部revoke</td>
+                        <td>最佳！Kafka 2.4+ 推荐，避免STW</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="callout">
+            <div class="callout-title">Cooperative Rebalancing 深入理解（Kafka 2.4+）</div>
+            <p>
+                传统的 Eager Rebalance 协议要求所有 Consumer 先 revoke 全部 Partition（STW），然后重新分配。
+                即使只有1个 Consumer 加入/离开，整个 Group 都要经历短暂停摆。<br><br>
+                <strong>Cooperative（Incremental）Rebalance</strong> 从 Kafka 2.4 引入，核心改进：
+                只 revoke 需要迁移的 Partition，不影响未变化的 Partition。
+                协议变为两轮：第一轮确定哪些 Partition 需要迁移（标记为"待迁移"）；
+                第二轮只有被标记的 Partition 执行 revoke 和 reassign，其余 Consumer 正常消费不中断。<br><br>
+                <strong>配置方式：</strong>设置 <code>partition.assignment.strategy=org.apache.kafka.clients.consumer.CooperativeStickyAssignor</code>。
+                注意：从 Eager 迁移到 Cooperative 需要经历一次"滚动升级"——先加 CooperativeStickyAssignor 到策略列表末尾，
+                全部实例更新完后再移除旧策略。不能一步到位切换，否则会触发 REBALANCE_IN_PROGRESS 错误。
+            </p>
+        </div>
+
+        <h4>避免 Rebalance 的最佳实践</h4>
+
+        <pre data-lang="Java"><code>// ====== 关键配置：减少不必要的 Rebalance ======
+props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 25000);      // 心跳超时25s（默认10s太短）
+props.put(ConsumerConfig.HEARTBEAT_INTERVAL_MS_CONFIG, 5000);    // 心跳间隔5s
+props.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 600000);   // poll间隔上限10min（处理慢也不被踢）
+props.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 50);           // 每次少拉点，确保能在interval内处理完
+
+// ====== 静态成员（Kafka 2.3+）：避免短暂故障触发Rebalance ======
+props.put(ConsumerConfig.GROUP_INSTANCE_ID_CONFIG, "consumer-host-01"); // 固定实例ID
+// 设置后，Consumer短暂离线（如滚动重启）不会立即触发Rebalance，
+// 在session.timeout.ms内重新连接可直接恢复原有Partition分配，无需Rebalance
+
+// ====== 使用 CooperativeStickyAssignor 避免全量 Rebalance ======
+props.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG, 
+    CooperativeStickyAssignor.class.getName());
+
+// ====== 注册 Rebalance 监听器做优雅处理 ======
+consumer.subscribe(Collections.singletonList("order-events"), new ConsumerRebalanceListener() {
+    @Override
+    public void onPartitionsRevoked(Collection&lt;TopicPartition&gt; partitions) {
+        // Partition 即将被收回 → 提交当前offset，避免重复消费
+        consumer.commitSync();
+        log.info("Partitions revoked: {}", partitions);
+    }
+    
+    @Override
+    public void onPartitionsAssigned(Collection&lt;TopicPartition&gt; partitions) {
+        // 新Partition分配到来 → 可以做初始化
+        log.info("Partitions assigned: {}", partitions);
+    }
+});</code></pre>
+
+        <h3>RocketMQ Rebalance 机制</h3>
+        <p>
+            RocketMQ 的 Rebalance 由 <strong>Consumer 端自行计算</strong>（不像 Kafka 由 Coordinator 集中分配）。
+            每个 Consumer 每20秒从 NameServer 获取最新的 MessageQueue 列表和同组 Consumer 列表，
+            然后在本地按分配策略计算自己应该消费哪些 Queue。
+        </p>
+        <p>
+            <strong>优势：</strong>去中心化，没有 Coordinator 单点瓶颈。<br>
+            <strong>劣势：</strong>各 Consumer 可能因为获取信息的时差而短暂出现"两个Consumer消费同一Queue"的情况
+            （通过 Broker 端的消费锁来兜底解决）。
+        </p>
+
+        <div class="qa-block">
+            <div class="qa-question">生产环境中 Kafka Consumer 频繁 Rebalance 怎么排查？</div>
+            <div class="qa-answer">
+                排查步骤：<br>
+                ①<strong>看日志</strong>：搜索 "Revoke" / "Rebalance" / "Member xxx has left"，确认是哪个Consumer离开；<br>
+                ②<strong>区分原因</strong>：<br>
+                &nbsp;&nbsp;- "member failed to send heartbeat" → session.timeout.ms 太短，或 Consumer 所在机器 GC / 网络抖动<br>
+                &nbsp;&nbsp;- "consumer poll timeout" → max.poll.interval.ms 不够，单次消费耗时太长<br>
+                &nbsp;&nbsp;- "member voluntarily left" → 代码中调用了 close() 或优雅停机<br>
+                ③<strong>解决方案</strong>：加大 session.timeout (25-45s)、加大 max.poll.interval (5-10min)、
+                减小 max.poll.records、优化消费逻辑耗时、使用 CooperativeStickyAssignor。
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- 补充：消息堆积处理（高频面试追问） -->
+    <!-- ============================================================ -->
+    <section class="chapter" id="ch11b">
+        <div class="chapter-header">
+            <div class="chapter-number">Bonus</div>
+            <h2>高频追问：消息堆积怎么处理？</h2>
+        </div>
+
+        <p>
+            "线上消费堆积了几百万条消息怎么办？" 是面试中经典的压力测试题。
+            它考查你的<strong>应急处理能力</strong>和<strong>对系统全链路的理解</strong>。
+        </p>
+
+        <h3>消息堆积的常见原因</h3>
+        <ul>
+            <li><strong>消费端处理慢：</strong>业务逻辑耗时长（如调外部接口超时）、线程池打满、GC频繁</li>
+            <li><strong>消费端异常：</strong>消费者抛异常导致不断重试，吞吐降到接近0</li>
+            <li><strong>流量突增：</strong>大促/活动带来超预期的消息量</li>
+            <li><strong>消费者不足：</strong>Consumer实例数 &lt; Partition/Queue数，并行度不够</li>
+            <li><strong>Rebalance频繁：</strong>消费组不停重平衡导致消费中断</li>
+        </ul>
+
+        <h3>应急处理方案（面试标准答案）</h3>
+        <h4>短期应急（分钟级）</h4>
+        <ol>
+            <li><strong>快速扩容消费者：</strong>增加 Consumer 实例数到 = Partition 数（Kafka）或 MessageQueue 数（RocketMQ）</li>
+            <li><strong>跳过非关键消息：</strong>如果堆积消息已过时效（如5分钟前的实时通知），可直接重置offset到最新位置</li>
+            <li><strong>转储+离线处理：</strong>启动临时消费者，将积压消息快速转存到数据库/文件，然后单独异步处理</li>
+        </ol>
+        <h4>中期优化（小时级）</h4>
+        <ol>
+            <li><strong>增加Partition/Queue：</strong>提高并行消费能力上限（Kafka需要扩Partition后重分配）</li>
+            <li><strong>优化消费逻辑：</strong>减少单条消息处理耗时（批量写DB、异步调用、缓存热数据）</li>
+            <li><strong>提升批量消费：</strong>一次 poll 更多消息 + 批量处理，减少 commit 频率</li>
+        </ol>
+        <h4>长期预防</h4>
+        <ol>
+            <li><strong>监控告警：</strong>设置消费Lag阈值告警（如超过10万条立即告警）</li>
+            <li><strong>限流降级：</strong>Producer端做限流，消费者做降级（非核心逻辑跳过）</li>
+            <li><strong>压测评估：</strong>上线前对消费链路做压测，确认极限吞吐</li>
+        </ol>
+
+        <pre data-lang="Java"><code>// Kafka：紧急情况下重置offset到最新（跳过积压）
+consumer.seekToEnd(consumer.assignment());
+consumer.commitSync();
+
+// RocketMQ：临时提升消费线程数
+consumer.setConsumeThreadMin(64);
+consumer.setConsumeThreadMax(128);
+consumer.setPullBatchSize(64); // 增大单次拉取量</code></pre>
+
+        <div class="qa-block">
+            <div class="qa-question">如果Kafka积压了1000万条消息，你的处理步骤是什么？</div>
+            <div class="qa-answer">
+                ①<strong>定位原因</strong>：看Consumer Lag监控，确认是哪个Consumer Group/哪些Partition堆积；检查消费者日志是否有异常；<br>
+                ②<strong>判断时效</strong>：如果消息已超时效（如30分钟前的推送通知），直接 seekToEnd 跳过；<br>
+                ③<strong>快速止血</strong>：如果消息仍有价值，立即水平扩容Consumer（确保不超过Partition数）；<br>
+                ④<strong>极端方案</strong>：如果单条消费太慢无法短期修复，创建一个临时Topic（比如有50个Partition），
+                部署一个转发Consumer把积压消息快速转发到临时Topic，然后部署50个消费者并行处理临时Topic；<br>
+                ⑤<strong>事后复盘</strong>：补充Lag监控告警、优化消费逻辑、评估是否需要扩Partition。
+            </div>
+        </div>
+    </section>
+
+    <hr>
+    <section class="chapter" id="ch12">
+        <div class="chapter-header">
+            <div class="chapter-number">Chapter 12</div>
+            <h2>深度原理：存储引擎设计</h2>
+        </div>
+
+        <p>
+            存储引擎是消息队列性能的根基。三大MQ的存储设计代表了三种截然不同的工程哲学。
+            面试深度考查时，能讲清"为什么这样设计"比"怎么实现"更重要。
+        </p>
+
+        <h3>Kafka 存储引擎：Partition-Level Log</h3>
+
+        <div class="diagram">
+            <svg width="800" height="260" viewBox="0 0 800 260" xmlns="http://www.w3.org/2000/svg">
+                <!-- Partition 目录 -->
+                <text x="20" y="25" font-size="11" fill="#ff6b35" font-weight="600">Topic: order-events, Partition: 0</text>
+                <text x="20" y="42" font-size="9" fill="#64748b">/data/kafka/order-events-0/</text>
+
+                <!-- Segment 文件们 -->
+                <rect x="20" y="55" width="230" height="75" rx="4" fill="#1a1008" stroke="#ff6b35" stroke-width="1"/>
+                <text x="135" y="72" font-size="9" fill="#ff6b35" text-anchor="middle" font-weight="600">Segment 0 (00000000000000000000)</text>
+                <text x="135" y="90" font-size="8" fill="#94a3b8" text-anchor="middle">.log  — 消息数据（顺序追加）</text>
+                <text x="135" y="104" font-size="8" fill="#94a3b8" text-anchor="middle">.index — 稀疏偏移量索引</text>
+                <text x="135" y="118" font-size="8" fill="#94a3b8" text-anchor="middle">.timeindex — 时间戳索引</text>
+
+                <rect x="270" y="55" width="230" height="75" rx="4" fill="#1a1008" stroke="#ff6b35" stroke-width="1"/>
+                <text x="385" y="72" font-size="9" fill="#ff6b35" text-anchor="middle" font-weight="600">Segment 1 (00000000000000050000)</text>
+                <text x="385" y="90" font-size="8" fill="#94a3b8" text-anchor="middle">.log  — offset 50000 开始</text>
+                <text x="385" y="104" font-size="8" fill="#94a3b8" text-anchor="middle">.index — 每4KB一条索引</text>
+                <text x="385" y="118" font-size="8" fill="#94a3b8" text-anchor="middle">.timeindex — 每条带时间戳</text>
+
+                <rect x="520" y="55" width="230" height="75" rx="4" fill="#2d1b0e" stroke="#ff6b35" stroke-width="1.5"/>
+                <text x="635" y="72" font-size="9" fill="#ffaa80" text-anchor="middle" font-weight="600">Active Segment (当前写入)</text>
+                <text x="635" y="90" font-size="8" fill="#94a3b8" text-anchor="middle">.log  — 正在追加写入</text>
+                <text x="635" y="104" font-size="8" fill="#94a3b8" text-anchor="middle">滚动条件: 1GB 或 7天</text>
+                <text x="635" y="118" font-size="8" fill="#94a3b8" text-anchor="middle">只有Active Segment可写</text>
+
+                <!-- 查找过程 -->
+                <text x="20" y="160" font-size="10" fill="#f59e0b" font-weight="600">按 offset=73500 查找消息的过程:</text>
+                <text x="20" y="180" font-size="9" fill="#94a3b8">① 二分查找确定Segment: 文件名 ≤ 73500 的最大者 → Segment 1 (50000)</text>
+                <text x="20" y="198" font-size="9" fill="#94a3b8">② 在.index中查找: 稀疏索引定位 offset 73500 附近的物理位置 → position=234567</text>
+                <text x="20" y="216" font-size="9" fill="#94a3b8">③ 在.log中顺序扫描: 从 position=234567 开始顺序读，直到找到 offset=73500</text>
+                <text x="20" y="240" font-size="9" fill="#64748b">时间复杂度: O(log N) + O(稀疏间距内的消息数)  — 通常 &lt;1ms</text>
+            </svg>
+            <div class="diagram-caption">图12-1：Kafka Segment 文件结构与消息查找过程</div>
+        </div>
+
+        <h4>Kafka 存储的核心设计要点</h4>
+        <ul>
+            <li><strong>顺序写入：</strong>Active Segment 只做追加写，磁盘顺序写速度接近内存（600MB/s vs 随机写100KB/s）</li>
+            <li><strong>Page Cache：</strong>Kafka 不自己管理缓存，完全依赖 OS 的 Page Cache。好处：①避免 JVM GC 问题；②进程重启不丢缓存；③读写可利用同一份缓存（写入后立即可从Page Cache中读出，尾部消费几乎零延迟）。
+                <strong>重要陷阱：</strong>当消费者严重滞后（Consumer Lag大）时，读取的数据已不在 Page Cache 中（"冷读"），
+                触发大量磁盘随机读IO，这些读IO会与生产者的写入竞争 Page Cache 和磁盘带宽，
+                可能导致生产者写入延迟飙升。这是 Kafka 生产环境中"消费积压拖垮整个集群"的根本原因。
+                解决方案：为落后消费者配置独立的 Follower 读取（Kafka 2.4+ Follower Fetching / KIP-392），
+                或使用 Tiered Storage 将冷数据分离到对象存储</li>
+            <li><strong>零拷贝（sendfile）：</strong>消费者读取时使用 <code>FileChannel.transferTo()</code> → 底层 <code>sendfile()</code> 系统调用。
+                数据路径：磁盘 → Page Cache → Socket Buffer → NIC（DMA直传），全程不经过用户态。
+                注意：Kafka 的零拷贝仅用于<strong>消费路径</strong>（Fetch请求），且前提是 Broker 不需要对消息做任何处理（如 SSL 加密会退化为普通拷贝）。
+                写入路径不用 sendfile，而是普通的 <code>FileChannel.write()</code> 到 Page Cache</li>
+            <li><strong>mmap 的角色：</strong>Kafka 对 <code>.index</code> 和 <code>.timeindex</code> 文件使用 mmap（MappedByteBuffer），但 <code>.log</code> 文件不用 mmap。
+                原因：.log 文件可能很大（1GB），mmap 映射过大文件在某些 OS 上有性能问题（页表压力、文件关闭时 flush 阻塞）</li>
+            <li><strong>稀疏索引：</strong>不为每条消息建索引（太浪费空间），每隔 <code>index.interval.bytes</code>（默认4KB）才记录一条。空间换时间的折中</li>
+            <li><strong>Log Compaction：</strong>保留每个 Key 的最新一条消息，删除旧版本。适用于 CDC / 状态变更等场景（如 KTable 的 changelog topic）</li>
+        </ul>
+
+        <h3>RocketMQ 存储引擎：CommitLog + ConsumeQueue</h3>
+
+        <div class="diagram">
+            <svg width="800" height="300" viewBox="0 0 800 300" xmlns="http://www.w3.org/2000/svg">
+                <!-- CommitLog -->
+                <rect x="20" y="20" width="760" height="90" rx="6" fill="#0a1f2e" stroke="#06b6d4" stroke-width="1.5"/>
+                <text x="400" y="42" font-size="11" fill="#06b6d4" text-anchor="middle" font-weight="600">CommitLog (所有Topic混合写入，默认1GB/文件)</text>
+                
+                <!-- 消息块 -->
+                <rect x="40" y="52" width="80" height="45" rx="2" fill="#0d2935" stroke="#0891b2" stroke-width="0.5"/>
+                <text x="80" y="68" font-size="7" fill="#67e8f9" text-anchor="middle">Topic-A msg1</text>
+                <text x="80" y="80" font-size="7" fill="#64748b" text-anchor="middle">offset=0</text>
+                <text x="80" y="92" font-size="7" fill="#64748b" text-anchor="middle">size=256B</text>
+
+                <rect x="130" y="52" width="80" height="45" rx="2" fill="#0d2935" stroke="#475569" stroke-width="0.5"/>
+                <text x="170" y="68" font-size="7" fill="#94a3b8" text-anchor="middle">Topic-B msg1</text>
+                <text x="170" y="80" font-size="7" fill="#64748b" text-anchor="middle">offset=256</text>
+                <text x="170" y="92" font-size="7" fill="#64748b" text-anchor="middle">size=512B</text>
+
+                <rect x="220" y="52" width="80" height="45" rx="2" fill="#0d2935" stroke="#0891b2" stroke-width="0.5"/>
+                <text x="260" y="68" font-size="7" fill="#67e8f9" text-anchor="middle">Topic-A msg2</text>
+                <text x="260" y="80" font-size="7" fill="#64748b" text-anchor="middle">offset=768</text>
+                <text x="260" y="92" font-size="7" fill="#64748b" text-anchor="middle">size=128B</text>
+
+                <rect x="310" y="52" width="80" height="45" rx="2" fill="#0d2935" stroke="#475569" stroke-width="0.5"/>
+                <text x="350" y="68" font-size="7" fill="#94a3b8" text-anchor="middle">Topic-C msg1</text>
+                <text x="350" y="80" font-size="7" fill="#64748b" text-anchor="middle">offset=896</text>
+
+                <rect x="400" y="52" width="80" height="45" rx="2" fill="#0d2935" stroke="#0891b2" stroke-width="0.5"/>
+                <text x="440" y="68" font-size="7" fill="#67e8f9" text-anchor="middle">Topic-A msg3</text>
+                <text x="440" y="80" font-size="7" fill="#64748b" text-anchor="middle">offset=1200</text>
+
+                <text x="530" y="76" font-size="20" fill="#475569">→ ...</text>
+
+                <!-- 时间箭头 -->
+                <line x1="40" y1="105" x2="560" y2="105" stroke="#334155" stroke-width="0.5" marker-end="url(#arr-st)"/>
+                <text x="580" y="108" font-size="8" fill="#475569">写入时间 →</text>
+
+                <!-- ConsumeQueue -->
+                <rect x="20" y="135" width="350" height="145" rx="6" fill="#081215" stroke="#06b6d4" stroke-width="1"/>
+                <text x="195" y="155" font-size="10" fill="#06b6d4" text-anchor="middle" font-weight="600">ConsumeQueue (Topic-A, Queue-0)</text>
+                <text x="195" y="170" font-size="8" fill="#64748b" text-anchor="middle">每条记录固定20字节，顺序存储</text>
+
+                <!-- CQ 记录 -->
+                <rect x="35" y="180" width="320" height="25" rx="2" fill="#0d2935" stroke="#0891b2" stroke-width="0.5"/>
+                <text x="55" y="196" font-size="8" fill="#67e8f9">offset=0</text>
+                <text x="120" y="196" font-size="8" fill="#94a3b8">| size=256</text>
+                <text x="200" y="196" font-size="8" fill="#94a3b8">| tagHash=0xAF3C</text>
+
+                <rect x="35" y="208" width="320" height="25" rx="2" fill="#0d2935" stroke="#0891b2" stroke-width="0.5"/>
+                <text x="55" y="224" font-size="8" fill="#67e8f9">offset=768</text>
+                <text x="120" y="224" font-size="8" fill="#94a3b8">| size=128</text>
+                <text x="200" y="224" font-size="8" fill="#94a3b8">| tagHash=0xAF3C</text>
+
+                <rect x="35" y="236" width="320" height="25" rx="2" fill="#0d2935" stroke="#0891b2" stroke-width="0.5"/>
+                <text x="55" y="252" font-size="8" fill="#67e8f9">offset=1200</text>
+                <text x="120" y="252" font-size="8" fill="#94a3b8">| size=256</text>
+                <text x="200" y="252" font-size="8" fill="#94a3b8">| tagHash=0xB12E</text>
+
+                <!-- IndexFile -->
+                <rect x="400" y="135" width="370" height="145" rx="6" fill="#081215" stroke="#475569" stroke-width="1"/>
+                <text x="585" y="155" font-size="10" fill="#94a3b8" text-anchor="middle" font-weight="600">IndexFile (按Key/时间查询)</text>
+                <text x="585" y="170" font-size="8" fill="#64748b" text-anchor="middle">Hash索引，支持按msgKey查询消息</text>
+                
+                <text x="420" y="195" font-size="8" fill="#94a3b8">结构: Header(40B) + Slot Table(500万) + Index(2000万)</text>
+                <text x="420" y="215" font-size="8" fill="#94a3b8">查找: msgKey.hashCode() % slotNum → 拉链法</text>
+                <text x="420" y="235" font-size="8" fill="#94a3b8">用途: 消息轨迹查询、问题排查</text>
+                <text x="420" y="255" font-size="8" fill="#64748b">注意: IndexFile不参与正常消费流程</text>
+
+                <defs>
+                    <marker id="arr-st" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                        <polygon points="0 0, 6 2.5, 0 5" fill="#334155"/>
+                    </marker>
+                </defs>
+            </svg>
+            <div class="diagram-caption">图12-2：RocketMQ CommitLog + ConsumeQueue + IndexFile 存储结构</div>
+        </div>
+
+        <h4>RocketMQ 存储的关键技术</h4>
+        <ul>
+            <li><strong>MappedFile (mmap)：</strong>CommitLog 和 ConsumeQueue 都使用内存映射文件，通过 MappedByteBuffer 操作。
+                写入时直接操作映射内存，由OS负责刷盘，性能接近内存操作。
+                RocketMQ 默认预分配（warmMappedFile），提前创建下一个 MappedFile 并预热（写入假数据填充 Page Table），避免写入时的缺页中断</li>
+            <li><strong>TransientStorePool（堆外内存池）：</strong>异步刷盘模式下，先写入堆外内存（Direct ByteBuffer池，默认5个1GB Buffer），
+                再由后台线程（FlushCommitLogService）定期 commit 到 FileChannel。好处：①写入和刷盘完全解耦，消除fsync导致的写入抖动；
+                ②使用堆外内存避免GC影响。缺点：Broker异常退出时堆外内存中的数据会丢失（未commit到文件）</li>
+            <li><strong>写入加锁：</strong>CommitLog 写入使用 <code>putMessageLock</code>（可配置为自旋锁 SpinLock 或 ReentrantLock），
+                同一时刻只有一个线程能追加消息。这是混合存储的代价——写入串行化。
+                默认使用自旋锁（useReentrantLockWhenPutMessage=false），低竞争时性能更好；
+                高并发写入时可切换为 ReentrantLock 避免 CPU 空转</li>
+            <li><strong>ReputMessageService：</strong>后台线程异步从 CommitLog 读取新消息，构建 ConsumeQueue 和 IndexFile。
+                这个过程是异步的，消费者读到的数据有极短延迟（通常 &lt; 1ms）。
+                如果 ReputMessageService 落后太多（如刚启动恢复时），会出现"消息已写入但消费者看不到"的窗口期</li>
+        </ul>
+
+        <h3>BookKeeper 存储引擎：Journal + Entry Log</h3>
+
+        <h4>BookKeeper (Pulsar 的存储层) 写入流程</h4>
+        <ul>
+            <li><strong>Journal (WAL)：</strong>消息先写入 Journal（预写日志），fsync 后即认为持久化成功。
+                Journal 使用独立的高速磁盘（推荐SSD），纯顺序写</li>
+            <li><strong>Memtable：</strong>写入 Journal 的同时，消息也缓存在内存中</li>
+            <li><strong>Entry Log：</strong>后台线程将 Memtable 中的数据批量排序写入 Entry Log 文件。
+                多个 Ledger 的 Entry 混合存储在同一个 Entry Log 中（类似 RocketMQ 的 CommitLog 混写思路）</li>
+            <li><strong>Ledger Index：</strong>维护 (LedgerId, EntryId) → (EntryLogId, Position) 的映射。
+                类似 RocketMQ 的 ConsumeQueue 功能</li>
+        </ul>
+        <p>
+            <strong>关键设计：读写分离磁盘。</strong>Journal（写）和 Entry Log（读）使用不同物理磁盘，
+            写入不影响读取，读取不阻塞写入。这是 BookKeeper 高性能的重要基础。
+        </p>
+
+        <h3>三者存储模型终极对比</h3>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>维度</th>
+                        <th><span class="tag-kafka">Kafka</span></th>
+                        <th><span class="tag-rocketmq">RocketMQ</span></th>
+                        <th><span class="tag-pulsar">BookKeeper</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>写模型</strong></td>
+                        <td>每Partition独立追加写</td>
+                        <td>单CommitLog追加写</td>
+                        <td>Journal追加写(WAL) + Entry Log</td>
+                    </tr>
+                    <tr>
+                        <td><strong>多Topic写性能</strong></td>
+                        <td>Topic多时退化（文件切换）</td>
+                        <td>不受Topic数量影响</td>
+                        <td>不受Topic数量影响</td>
+                    </tr>
+                    <tr>
+                        <td><strong>读模型</strong></td>
+                        <td>顺序读（消费跟写入同文件）</td>
+                        <td>索引定位 + 随机读CommitLog</td>
+                        <td>Entry Log随机读 + Cache</td>
+                    </tr>
+                    <tr>
+                        <td><strong>热数据读取</strong></td>
+                        <td>Page Cache命中率高</td>
+                        <td>Page Cache + 堆外缓存</td>
+                        <td>Managed Ledger Cache</td>
+                    </tr>
+                    <tr>
+                        <td><strong>冷数据读取</strong></td>
+                        <td>顺序读，性能仍可接受</td>
+                        <td>随机读CommitLog，性能下降</td>
+                        <td>可对接分层存储(S3等)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>空间回收</strong></td>
+                        <td>按Segment删除/Log Compaction</td>
+                        <td>按CommitLog文件过期删除</td>
+                        <td>Ledger粒度删除 + GC</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">为什么 Kafka 的顺序写这么快？具体快在哪里？</div>
+            <div class="qa-answer">
+                磁盘的物理特性决定了顺序写和随机写的巨大差距：<br>
+                <strong>机械硬盘(HDD)：</strong>顺序写 ~100-200MB/s，随机写 ~100-200KB/s（差1000倍！原因是寻道时间 ~10ms）<br>
+                <strong>固态硬盘(SSD)：</strong>顺序写 ~500MB/s，随机写 ~50MB/s（差10倍，因为SSD无寻道但有写放大和GC）<br><br>
+                Kafka 追加写入只需要：①磁头持续写不动（HDD）或 ②连续填充 NAND Block（SSD）。
+                完全消除了寻道时间和随机IO。配合 OS 的 Page Cache 预读 + 顺序写合并（writeback），
+                实际写入性能可以逼近内存带宽。<br><br>
+                LinkedIn 的基准测试：单Broker单Partition顺序写入达到 <strong>800MB/s</strong>（未开复制），
+                这就是为什么 Kafka 的吞吐量能达到百万级 TPS。
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- 第十三章：深度原理 - 副本机制与高可用 -->
+    <!-- ============================================================ -->
+    <section class="chapter" id="ch13">
+        <div class="chapter-header">
+            <div class="chapter-number">Chapter 13</div>
+            <h2>深度原理：副本机制与高可用</h2>
+        </div>
+
+        <p>
+            高可用是消息队列的生命线。一个MQ系统如果不能在节点故障时继续提供服务，
+            就失去了作为"可靠异步通信基础设施"的资格。三大MQ在副本机制上各有千秋，
+            代表了分布式系统领域不同的一致性与可用性权衡。
+        </p>
+
+        <h3>Kafka 副本机制：ISR（In-Sync Replicas）</h3>
+
+        <div class="diagram">
+            <svg width="820" height="320" viewBox="0 0 820 320" xmlns="http://www.w3.org/2000/svg">
+                <!-- Leader -->
+                <rect x="280" y="20" width="260" height="130" rx="6" fill="#2d1b0e" stroke="#ff6b35" stroke-width="1.5"/>
+                <text x="410" y="42" font-size="11" fill="#ff6b35" text-anchor="middle" font-weight="700">Leader (Broker 0)</text>
+                
+                <!-- Log -->
+                <rect x="295" y="55" width="230" height="30" rx="3" fill="#1a1008" stroke="#d97706" stroke-width="0.5"/>
+                <text x="300" y="74" font-size="8" fill="#fcd34d">| 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |</text>
+                
+                <text x="295" y="103" font-size="9" fill="#f59e0b">LEO (Log End Offset) = 9</text>
+                <text x="295" y="118" font-size="9" fill="#10b981">HW (High Watermark) = 7</text>
+                <text x="295" y="135" font-size="8" fill="#64748b">Consumer 只能读到 HW 之前的消息</text>
+
+                <!-- Follower 1 (ISR) -->
+                <rect x="30" y="190" width="220" height="110" rx="6" fill="#1a1a0a" stroke="#10b981" stroke-width="1.2"/>
+                <text x="140" y="212" font-size="10" fill="#10b981" text-anchor="middle" font-weight="600">Follower 1 (ISR成员)</text>
+                <rect x="45" y="225" width="190" height="25" rx="3" fill="#0a1a0a" stroke="#475569" stroke-width="0.5"/>
+                <text x="50" y="242" font-size="8" fill="#94a3b8">| 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |</text>
+                <text x="45" y="268" font-size="8" fill="#94a3b8">LEO = 8, 同步中...</text>
+                <text x="45" y="283" font-size="8" fill="#10b981">lag &lt; replica.lag.time.max.ms ✓</text>
+
+                <!-- Follower 2 (ISR) -->
+                <rect x="300" y="190" width="220" height="110" rx="6" fill="#1a1a0a" stroke="#10b981" stroke-width="1.2"/>
+                <text x="410" y="212" font-size="10" fill="#10b981" text-anchor="middle" font-weight="600">Follower 2 (ISR成员)</text>
+                <rect x="315" y="225" width="190" height="25" rx="3" fill="#0a1a0a" stroke="#475569" stroke-width="0.5"/>
+                <text x="320" y="242" font-size="8" fill="#94a3b8">| 0 | 1 | 2 | 3 | 4 | 5 | 6 |</text>
+                <text x="315" y="268" font-size="8" fill="#94a3b8">LEO = 7, 同步中...</text>
+                <text x="315" y="283" font-size="8" fill="#10b981">lag &lt; replica.lag.time.max.ms ✓</text>
+
+                <!-- Follower 3 (Out-of-sync) -->
+                <rect x="570" y="190" width="220" height="110" rx="6" fill="#1a0a0a" stroke="#f87171" stroke-width="1.2" stroke-dasharray="4"/>
+                <text x="680" y="212" font-size="10" fill="#f87171" text-anchor="middle" font-weight="600">Follower 3 (已踢出ISR)</text>
+                <rect x="585" y="225" width="190" height="25" rx="3" fill="#1a0a0a" stroke="#475569" stroke-width="0.5"/>
+                <text x="590" y="242" font-size="8" fill="#94a3b8">| 0 | 1 | 2 | 3 |</text>
+                <text x="585" y="268" font-size="8" fill="#94a3b8">LEO = 4, 严重落后!</text>
+                <text x="585" y="283" font-size="8" fill="#f87171">lag &gt; 30s → 移出ISR ✗</text>
+
+                <!-- 拉取箭头 -->
+                <line x1="140" y1="190" x2="350" y2="150" stroke="#10b981" stroke-width="1" stroke-dasharray="3" marker-end="url(#arr-ha)"/>
+                <line x1="410" y1="190" x2="410" y2="150" stroke="#10b981" stroke-width="1" stroke-dasharray="3" marker-end="url(#arr-ha)"/>
+                <line x1="680" y1="190" x2="490" y2="150" stroke="#f87171" stroke-width="1" stroke-dasharray="3" marker-end="url(#arr-ha2)"/>
+
+                <!-- ISR 说明 -->
+                <text x="50" y="315" font-size="9" fill="#f59e0b" font-weight="600">ISR = {Leader, Follower1, Follower2}  |  HW = min(所有ISR成员的LEO) = 7</text>
+
+                <defs>
+                    <marker id="arr-ha" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                        <polygon points="0 0, 6 2.5, 0 5" fill="#10b981"/>
+                    </marker>
+                    <marker id="arr-ha2" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                        <polygon points="0 0, 6 2.5, 0 5" fill="#f87171"/>
+                    </marker>
+                </defs>
+            </svg>
+            <div class="diagram-caption">图13-1：Kafka ISR 机制 — Leader/Follower 同步与 High Watermark</div>
+        </div>
+
+        <h4>ISR 核心机制详解</h4>
+        <ul>
+            <li><strong>LEO (Log End Offset)：</strong>每个副本最新一条消息的下一个位置（即下一条要写入的offset）</li>
+            <li><strong>HW (High Watermark)：</strong>所有 ISR 成员中最小的 LEO。Consumer 只能读到 HW 之前的消息。
+                这保证了即使 Leader 挂了，已被消费的消息在新 Leader 上一定存在</li>
+            <li><strong>ISR 动态伸缩：</strong>Follower 如果在 <code>replica.lag.time.max.ms</code>（默认30s）内
+                没有追上 Leader 的 LEO，就会被移出 ISR。追上后可以重新加入</li>
+            <li><strong>Leader 选举：</strong>只有 ISR 中的副本才有资格当选新 Leader（除非开启 unclean.leader.election）</li>
+        </ul>
+
+        <h4>Kafka Leader 故障恢复流程</h4>
+        <pre data-lang="Text"><code>Leader 宕机（ISR = {Broker0(Leader), Broker1, Broker2}）
+    ↓
+Controller 检测到 Leader 失联
+  - KRaft模式: Controller Quorum中的Active Controller通过心跳超时(broker.heartbeat.interval.ms)检测
+  - 旧ZK模式: 通过ZK的Ephemeral节点消失触发Watch
+    ↓
+从 ISR 中选择新 Leader
+  - 优先选择ISR中LEO最大的副本（数据最新）
+  - 如果ISR为空且unclean.leader.election.enable=true，可选非ISR副本（会丢数据！）
+  - 新Leader的Epoch递增（Leader Epoch+1），防止脑裂
+    ↓
+Controller 将新Leader信息写入元数据日志(__cluster_metadata)并推送给所有Broker
+    ↓
+新 Leader 上线，HW 重新计算
+    ↓
+其他 Follower 向新Leader发送OffsetsForLeaderEpoch请求，确定需要截断的位置
+  - 截断到新Leader的LEO（而非旧HW），然后从新 Leader 继续拉取
+    ↓
+Producer 通过 metadata 刷新感知新 Leader，重新路由请求
+
+整个过程耗时：KRaft模式通常 1-5秒；旧ZK模式 5-30秒（取决于Session Timeout和元数据加载）</code></pre>
+
+        <h3>RocketMQ 副本机制</h3>
+
+        <h4>4.x 版本：Master-Slave 手动切换</h4>
+        <ul>
+            <li><strong>SYNC_MASTER：</strong>消息写入 Master 后，同步复制到 Slave，两者都写成功才返回 ACK。
+                Master 宕机后 Slave 有完整数据，但<strong>需要手动切换</strong>（运维介入）</li>
+            <li><strong>ASYNC_MASTER：</strong>消息写入 Master 后立即返回，异步复制到 Slave。
+                Master 宕机可能丢失少量未复制的消息</li>
+            <li><strong>缺陷：</strong>不支持自动故障转移（Failover）。Master 挂了，Slave 只能提供读服务，不能写入</li>
+        </ul>
+
+        <h4>5.x 版本：Controller 模式（当前推荐）</h4>
+        <ul>
+            <li>选举逻辑从 Broker 剥离到独立的 <strong>Controller</strong> 组件（可嵌入 NameServer 进程）</li>
+            <li>Controller 基于 Raft 实现，负责 Broker 的 Master 选举和切换</li>
+            <li>Broker 自身不再运行 Raft 协议，复杂度大幅降低</li>
+            <li>支持<strong>多副本 + 自动切换</strong>，服务秒级恢复</li>
+            <li>相比 DLedger 模式：部署更简单（Broker 无需凑 3 节点 Raft 组），升级兼容性更好</li>
+        </ul>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>模式</th>
+                        <th>数据可靠性</th>
+                        <th>自动切换</th>
+                        <th>写入性能</th>
+                        <th>最少节点</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>ASYNC_MASTER + SLAVE</td>
+                        <td>可能丢少量</td>
+                        <td>不支持</td>
+                        <td>最高</td>
+                        <td>2</td>
+                    </tr>
+                    <tr>
+                        <td>SYNC_MASTER + SLAVE</td>
+                        <td>不丢</td>
+                        <td>不支持</td>
+                        <td>中等</td>
+                        <td>2</td>
+                    </tr>
+                    <tr>
+                        <td>DLedger (Raft)</td>
+                        <td>不丢（多数派）</td>
+                        <td>支持（秒级）</td>
+                        <td>较低（Raft开销）</td>
+                        <td>3（4.5+可用）</td>
+                    </tr>
+                    <tr>
+                        <td>Controller模式 (5.x推荐)</td>
+                        <td>不丢（同步复制+多数派选举）</td>
+                        <td>支持（秒级）</td>
+                        <td>中等（Broker无需运行Raft）</td>
+                        <td>2 Broker + 3 Controller节点</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Pulsar/BookKeeper 副本机制：Quorum Write</h3>
+
+        <h4>三个关键参数</h4>
+        <ul>
+            <li><strong>Ensemble Size (E)：</strong>参与存储的 Bookie 总数（条带宽度）</li>
+            <li><strong>Write Quorum (WQ)：</strong>每条 Entry 写入的 Bookie 数量（副本因子）</li>
+            <li><strong>Ack Quorum (AQ)：</strong>收到几个 Bookie 确认即认为写入成功</li>
+        </ul>
+
+        <p>例如 E=5, WQ=3, AQ=2 表示：</p>
+        <ul>
+            <li>共5个 Bookie 参与这个 Ledger 的存储</li>
+            <li>每条消息写入其中 3 个 Bookie（轮询选择，实现条带化）</li>
+            <li>收到 2 个 Bookie 的确认就返回成功</li>
+            <li>容忍 WQ - AQ = 1 个 Bookie 同时故障</li>
+        </ul>
+
+        <div class="diagram">
+            <svg width="800" height="200" viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg">
+                <!-- 5个Bookie -->
+                <rect x="50" y="80" width="100" height="50" rx="4" fill="#1a1a0a" stroke="#f59e0b" stroke-width="1"/>
+                <text x="100" y="105" font-size="9" fill="#fbbf24" text-anchor="middle" font-weight="600">Bookie 0</text>
+                <text x="100" y="120" font-size="8" fill="#94a3b8" text-anchor="middle">E0, E3</text>
+
+                <rect x="180" y="80" width="100" height="50" rx="4" fill="#1a1a0a" stroke="#f59e0b" stroke-width="1"/>
+                <text x="230" y="105" font-size="9" fill="#fbbf24" text-anchor="middle" font-weight="600">Bookie 1</text>
+                <text x="230" y="120" font-size="8" fill="#94a3b8" text-anchor="middle">E0, E1, E4</text>
+
+                <rect x="310" y="80" width="100" height="50" rx="4" fill="#1a1a0a" stroke="#f59e0b" stroke-width="1"/>
+                <text x="360" y="105" font-size="9" fill="#fbbf24" text-anchor="middle" font-weight="600">Bookie 2</text>
+                <text x="360" y="120" font-size="8" fill="#94a3b8" text-anchor="middle">E1, E2</text>
+
+                <rect x="440" y="80" width="100" height="50" rx="4" fill="#1a1a0a" stroke="#f59e0b" stroke-width="1"/>
+                <text x="490" y="105" font-size="9" fill="#fbbf24" text-anchor="middle" font-weight="600">Bookie 3</text>
+                <text x="490" y="120" font-size="8" fill="#94a3b8" text-anchor="middle">E2, E3</text>
+
+                <rect x="570" y="80" width="100" height="50" rx="4" fill="#1a1a0a" stroke="#f59e0b" stroke-width="1"/>
+                <text x="620" y="105" font-size="9" fill="#fbbf24" text-anchor="middle" font-weight="600">Bookie 4</text>
+                <text x="620" y="120" font-size="8" fill="#94a3b8" text-anchor="middle">E3, E4</text>
+
+                <!-- 说明 -->
+                <text x="50" y="30" font-size="10" fill="#f59e0b" font-weight="600">E=5, WQ=3, AQ=2 的 Entry 分布示例:</text>
+                <text x="50" y="50" font-size="9" fill="#94a3b8">Entry 0 → Bookie{0,1,2}  |  Entry 1 → Bookie{1,2,3}  |  Entry 2 → Bookie{2,3,4}</text>
+                <text x="50" y="65" font-size="9" fill="#94a3b8">Entry 3 → Bookie{3,4,0}  |  Entry 4 → Bookie{4,0,1}  ... (Round-Robin条带)</text>
+
+                <text x="50" y="160" font-size="9" fill="#10b981" font-weight="600">优势: 数据均匀分散，无热点Bookie；任何单点故障不影响读写</text>
+                <text x="50" y="178" font-size="9" fill="#64748b">Bookie故障时: Ledger自动Fencing + 创建新Ledger写入新的Bookie组合</text>
+            </svg>
+            <div class="diagram-caption">图13-2：BookKeeper Quorum Write 条带化写入示意</div>
+        </div>
+
+        <h4>BookKeeper Fencing（隔离）机制</h4>
+        <p>
+            当 Broker 怀疑当前 Ledger 的 Owner Broker 故障时，会对该 Ledger 执行 <strong>Fencing</strong>：
+        </p>
+        <ul>
+            <li>向该 Ledger 的所有 Bookie 发送 fence 请求，多数派响应后 Ledger 被标记为 fenced</li>
+            <li>原 Owner Broker（如果还活着）对该 Ledger 的写入请求会被拒绝（FencedException）</li>
+            <li>新 Owner Broker 创建新 Ledger 继续写入</li>
+            <li>这避免了"脑裂"问题——不会出现两个 Broker 同时写同一个 Ledger</li>
+        </ul>
+
+        <h3>三者高可用能力终极对比</h3>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>对比维度</th>
+                        <th><span class="tag-kafka">Kafka</span></th>
+                        <th><span class="tag-rocketmq">RocketMQ</span></th>
+                        <th><span class="tag-pulsar">Pulsar</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>故障检测</strong></td>
+                        <td>Controller通过心跳检测(KRaft内嵌)</td>
+                        <td>NameServer 120s心跳超时</td>
+                        <td>ZK Session + Broker 负载感知</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Leader选举</strong></td>
+                        <td>ISR中优先LEO最大的</td>
+                        <td>Controller模式:外部Raft选举</td>
+                        <td>无需选举（Broker无状态，重分配ownership）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>恢复时间</strong></td>
+                        <td>5-30s (取决于ISR追赶)</td>
+                        <td>手动切换：分钟级<br>Controller模式：秒级</td>
+                        <td>秒级（Broker无状态，即接即用）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>数据一致性</strong></td>
+                        <td>HW截断（可能丢HW之后的数据）</td>
+                        <td>SYNC_MASTER不丢<br>ASYNC可能丢</td>
+                        <td>AQ确认后不丢（Journal fsync）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>脑裂防护</strong></td>
+                        <td>Epoch机制（Controller Epoch + Leader Epoch）</td>
+                        <td>DLedger Term</td>
+                        <td>BookKeeper Fencing</td>
+                    </tr>
+                    <tr>
+                        <td><strong>容忍故障数</strong></td>
+                        <td>ISR-1个节点</td>
+                        <td>DLedger: (N-1)/2个</td>
+                        <td>WQ-AQ个Bookie</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">Kafka 的 HW（High Watermark）机制有什么缺陷？Leader Epoch 是怎么改进的？</div>
+            <div class="qa-answer">
+                <strong>HW 的缺陷（Kafka 0.11 之前）：</strong><br>
+                场景：Leader LEO=5, HW=3; Follower LEO=4, HW=3。Follower 先宕机重启，
+                按照规则截断到 HW=3。此时如果 Leader 也宕机，Follower 成为新 Leader，
+                数据 offset=3 和 offset=4 丢失了——即使原来 Follower 已经拥有 offset=3 的数据。<br><br>
+                <strong>Leader Epoch 的改进（Kafka 0.11+）：</strong><br>
+                引入 (Epoch, StartOffset) 记录。Follower 重启后不直接截断到 HW，
+                而是先向 Leader 请求 "你的 Epoch X 最后写到哪？"（OffsetsForLeaderEpoch 请求）。
+                Leader 返回准确位置，Follower 只截断真正不一致的部分。
+                这避免了上述"双重宕机导致数据丢失"的问题。
+            </div>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">Pulsar 的 Broker 无状态是真的完全无状态吗？故障切换有多快？</div>
+            <div class="qa-answer">
+                <strong>不是100%无状态，但"近似"无状态：</strong><br>
+                Broker 在内存中维护了：①Topic ownership 信息；②Managed Ledger Cache（热数据缓存）；
+                ③Cursor（消费位点快照）。但这些都可以从 BookKeeper/ZK 中快速重建。<br><br>
+                <strong>故障切换速度：</strong><br>
+                ①ZK 检测 Broker Session 超时：3-10秒（取决于 Session Timeout 配置）；<br>
+                ②Load Manager 将 Topic 重新分配给其他 Broker：毫秒级；<br>
+                ③新 Broker 打开对应 Ledger，重建 Cursor：百毫秒级；<br>
+                ④整体 E2E 恢复：通常 <strong>5-15秒</strong>。<br><br>
+                对比 Kafka：Kafka 恢复需要等新 Leader 的 Follower 追上数据（如果 ISR 已缩小），
+                极端情况可能需要分钟级。Pulsar 因为数据在 BookKeeper 中是完整的，无需追赶。
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- 第十四章：深度原理 - 性能对比与选型决策 -->
+    <!-- ============================================================ -->
+    <section class="chapter" id="ch14">
+        <div class="chapter-header">
+            <div class="chapter-number">Chapter 14</div>
+            <h2>深度原理：性能对比与选型决策</h2>
+        </div>
+
+        <p>
+            选型题是面试压轴问题——它考查的不是背诵能力，而是<strong>系统性的工程判断力</strong>。
+            回答时切忌只说"A比B好"，要说明<strong>在什么条件下、为什么、有什么代价</strong>。
+        </p>
+
+        <h3>性能基准对比</h3>
+
+        <div class="callout">
+            <div class="callout-title">声明</div>
+            <p>以下数据基于公开的基准测试（OpenMessaging Benchmark、Confluent/StreamNative 白皮书）。
+            实际性能高度依赖硬件配置、网络环境和调优参数，仅作量级参考。
+            测试条件：单条消息1KB、3副本、无压缩、单机NVMe SSD、16核64GB机器，除非另行标注。
+            <strong>注意：</strong>不同测试报告的结论可能差异很大——Confluent 的测试往往对 Kafka 有利，
+            StreamNative 的测试对 Pulsar 有利。这里尽量取中间值和多源交叉验证的结果。
+            真正的选型决策不应仅依赖吞吐/延迟数字，还需考虑功能适配度、运维成本和团队熟悉程度。</p>
+        </div>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>指标</th>
+                        <th><span class="tag-kafka">Kafka</span></th>
+                        <th><span class="tag-rocketmq">RocketMQ</span></th>
+                        <th><span class="tag-pulsar">Pulsar</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>单Broker吞吐(Producer)</strong></td>
+                        <td>60-100万 msg/s (acks=1, 1KB)<br>20-40万 (acks=all, 3副本, 1KB)<br>注：大消息(10KB)时约降至1/5</td>
+                        <td>10-15万 msg/s (异步刷盘)<br>3-5万 (同步刷盘)</td>
+                        <td>20-40万 msg/s (AQ=2)<br>与Kafka差距主要来自多一跳网络写入</td>
+                    </tr>
+                    <tr>
+                        <td><strong>P99延迟(1KB消息)</strong></td>
+                        <td>2-5ms (acks=1)<br>5-15ms (acks=all)</td>
+                        <td>2-10ms (异步刷盘)<br>10-50ms (同步刷盘)</td>
+                        <td>5-25ms (取决于Journal fsync策略)<br>注：P99比平均值高3-5倍</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Topic数对性能影响</strong></td>
+                        <td>Topic>1000时明显下降</td>
+                        <td>影响极小（混合CommitLog）</td>
+                        <td>影响小（Segment化存储）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>消息大小敏感度</strong></td>
+                        <td>大消息(>100KB)性能优异</td>
+                        <td>中等</td>
+                        <td>小消息(<1KB)条件下竞争力强</td>
+                    </tr>
+                    <tr>
+                        <td><strong>扩容后性能恢复</strong></td>
+                        <td>慢（需手动rebalance数据）</td>
+                        <td>中等</td>
+                        <td>快（Broker无状态秒级）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>消费积压(Backlog)影响</strong></td>
+                        <td>小（顺序读文件尾）</td>
+                        <td>大（随机读CommitLog）</td>
+                        <td>中（可对接分层存储）</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Kafka 吞吐量领先的技术根因</h3>
+        <ul>
+            <li><strong>零拷贝（sendfile）：</strong>消费路径通过 sendfile() 绕过用户态，数据从 Page Cache 经 Socket Buffer 直达 NIC，省去两次用户态拷贝和上下文切换。RocketMQ 使用 mmap 读取 CommitLog 后还需在用户态做 Tag 过滤等逻辑，无法用 sendfile；Pulsar 因为 Broker 需要从 BookKeeper 读取再转发给 Consumer，天然多一跳</li>
+            <li><strong>批量 + 压缩：</strong>Producer 端按 batch 聚合后整体压缩（整个 RecordBatch 压缩一次），网络传输量可减少 70%+。Broker 端不解压（pass-through），直接存储压缩后的 batch，Consumer 端解压。这意味着"压缩对 Broker 零开销"</li>
+            <li><strong>顺序IO：</strong>写入和消费（大部分是尾部读取即"追尾读"）都是顺序IO，充分发挥磁盘带宽。只有消费积压（backlog）严重时才退化为随机读，但因为是单文件内的顺序偏移访问，OS 预读机制仍然有效</li>
+            <li><strong>分区级并行写入：</strong>每个 Partition 由 Leader 独立处理写入请求，不同 Partition 之间完全无锁。RocketMQ 的 CommitLog 是全局单文件写入，需要 putMessageLock 串行化。当 Partition 数适中（百级）时，Kafka 的写入并行度远高于 RocketMQ</li>
+            <li><strong>PageCache 预热：</strong>对于尾部消费（消费者跟上生产者），写入的数据还在 Page Cache 热区就被消费读走，等同于纯内存操作，磁盘IO约等于零</li>
+        </ul>
+
+        <h3>选型决策矩阵</h3>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>场景特征</th>
+                        <th>推荐选型</th>
+                        <th>原因</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>日志/指标收集、大数据ETL</td>
+                        <td><span class="tag-kafka">Kafka</span></td>
+                        <td>超高吞吐 + Connector生态 + 与Flink/Spark集成成熟</td>
+                    </tr>
+                    <tr>
+                        <td>实时流计算 + CDC</td>
+                        <td><span class="tag-kafka">Kafka</span></td>
+                        <td>Kafka Streams / ksqlDB / Debezium 生态完善</td>
+                    </tr>
+                    <tr>
+                        <td>电商交易链路、金融业务消息</td>
+                        <td><span class="tag-rocketmq">RocketMQ</span></td>
+                        <td>事务消息+延迟消息+消息轨迹+死信队列，功能全家桶</td>
+                    </tr>
+                    <tr>
+                        <td>高并发秒杀削峰</td>
+                        <td><span class="tag-rocketmq">RocketMQ</span></td>
+                        <td>久经双11考验、消息过滤减少无效消费</td>
+                    </tr>
+                    <tr>
+                        <td>多租户SaaS平台</td>
+                        <td><span class="tag-pulsar">Pulsar</span></td>
+                        <td>原生Tenant/Namespace隔离、资源配额管理</td>
+                    </tr>
+                    <tr>
+                        <td>跨地域/多数据中心复制</td>
+                        <td><span class="tag-pulsar">Pulsar</span></td>
+                        <td>内建 Geo-Replication，配置即用</td>
+                    </tr>
+                    <tr>
+                        <td>K8s云原生、弹性伸缩诉求强</td>
+                        <td><span class="tag-pulsar">Pulsar</span></td>
+                        <td>Broker无状态，Pod扩缩容秒级生效</td>
+                    </tr>
+                    <tr>
+                        <td>Topic数极多(>万级)</td>
+                        <td><span class="tag-rocketmq">RocketMQ</span> / <span class="tag-pulsar">Pulsar</span></td>
+                        <td>Kafka在超多Partition下IO退化严重</td>
+                    </tr>
+                    <tr>
+                        <td>团队运维能力有限</td>
+                        <td><span class="tag-rocketmq">RocketMQ</span></td>
+                        <td>NameServer极简、全中文文档社区、Dashboard完善</td>
+                    </tr>
+                    <tr>
+                        <td>需要同时满足队列+流处理</td>
+                        <td><span class="tag-pulsar">Pulsar</span></td>
+                        <td>统一消息和流的双重模型、Pulsar Functions轻量计算</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>面试回答框架：选型题"三步法"</h3>
+
+        <div class="callout">
+            <div class="callout-title">面试官问："你们公司用的什么MQ？为什么？"</div>
+            <p>
+                回答框架（以回答 "选了RocketMQ" 为例）：<br><br>
+                <strong>第一步：说场景</strong><br>
+                "我们的核心场景是电商交易链路——订单创建、支付回调、库存扣减、积分发放，需要事务消息保证本地事务和消息投递的原子性，
+                也需要延迟消息做订单超时关闭。"<br><br>
+                <strong>第二步：说对比</strong><br>
+                "对比了 Kafka 和 RocketMQ：Kafka 吞吐更高但缺少原生事务消息和延迟消息，需要自己实现增加开发成本；
+                Pulsar 功能全但运维三套集群复杂度高，且我们不需要多租户。"<br><br>
+                <strong>第三步：说结果</strong><br>
+                "最终选了 RocketMQ 5.x：事务消息、延迟消息、消息轨迹、死信队列开箱即用，
+                DLedger 模式实现自动故障切换。实测吞吐 8 万 TPS 满足我们峰值需求（峰值 3 万），留有余量。"
+            </p>
+        </div>
+
+        <h3>性能调优速查手册</h3>
+
+        <h4><span class="tag-kafka">Kafka</span> 调优关键参数</h4>
+        <pre data-lang="Properties"><code># === Producer 吞吐优化 ===
+batch.size=65536              # 64KB 批次大小（默认16KB偏小）
+linger.ms=20                  # 等待20ms凑批
+compression.type=lz4          # LZ4压缩（高吞吐场景首选）
+buffer.memory=67108864        # 64MB 缓冲区
+
+# === Broker 优化 ===
+num.io.threads=16             # IO线程数（建议=磁盘数*2）
+num.network.threads=8         # 网络线程数
+socket.send.buffer.bytes=1048576    # 1MB Socket缓冲
+log.flush.interval.messages=10000   # 每1万条刷盘一次（牺牲少许可靠换性能）
+
+# === Consumer 优化 ===
+fetch.min.bytes=1048576       # 至少攒1MB再返回
+fetch.max.wait.ms=500         # 最多等500ms
+max.poll.records=1000         # 每次拉取1000条</code></pre>
+
+        <h4><span class="tag-rocketmq">RocketMQ</span> 调优关键参数</h4>
+        <pre data-lang="Properties"><code># === Broker 优化 ===
+sendMessageThreadPoolNums=32         # 发送消息线程数
+flushDiskType=ASYNC_FLUSH            # 异步刷盘（性能优先）
+brokerRole=SYNC_MASTER               # 同步双写（可靠性优先时选）
+transientStorePoolEnable=true        # 开启堆外内存池（异步刷盘时推荐）
+transferMsgByHeap=false              # 消费时直接从文件读取，不走JVM堆
+
+# === Producer 优化 ===
+compressMsgBodyOverHowmuch=4096      # 超过4KB压缩
+sendMsgTimeout=3000                  # 发送超时3s
+retryTimesWhenSendFailed=3           # 同步重试3次
+
+# === Consumer 优化 ===
+consumeThreadMin=20                  # 最小消费线程
+consumeThreadMax=64                  # 最大消费线程
+pullBatchSize=32                     # 单次拉取32条
+consumeMessageBatchMaxSize=1         # 每次投递给Listener的消息数
+maxReconsumeTimes=16                 # 最大重试次数(超出进入DLQ)</code></pre>
+
+        <h3>面试"终极大招"题</h3>
+
+        <div class="qa-block">
+            <div class="qa-question">如果让你从零设计一个消息队列，你会怎么设计？需要考虑哪些核心问题？</div>
+            <div class="qa-answer">
+                这是一道开放题，考查系统设计能力。推荐分层回答：<br><br>
+                <strong>1. 存储层设计：</strong><br>
+                - 选择追加写日志结构（Append-only Log），利用顺序IO获取高吞吐<br>
+                - 设计分段（Segment）机制方便过期数据清理<br>
+                - 需要决策：存算一体 vs 存算分离？取决于弹性需求<br><br>
+
+                <strong>2. 通信协议：</strong><br>
+                - 客户端-服务端用自定义二进制协议（高性能）或 gRPC（通用性）<br>
+                - 需要设计 Request-Response + 异步回调机制<br><br>
+
+                <strong>3. 分区与路由：</strong><br>
+                - Topic 分片（Partition）实现水平扩展<br>
+                - Producer 端路由策略（轮询、Key哈希、自定义）<br>
+                - 元数据服务管理路由表（类似 NameServer/ZK）<br><br>
+
+                <strong>4. 副本与一致性：</strong><br>
+                - 多副本保证高可用，选择一致性协议（ISR/Raft/Quorum）<br>
+                - 定义 ACK 语义（acks=0/1/all）让用户按需选择<br><br>
+
+                <strong>5. 消费模型：</strong><br>
+                - Pull 模型 + 长轮询（平衡实时性和消费者压力）<br>
+                - Consumer Group + Rebalance 实现负载均衡<br>
+                - Offset/Cursor 管理消费进度<br><br>
+
+                <strong>6. 高级特性（按需）：</strong><br>
+                - 延迟消息：时间轮 or 延迟队列<br>
+                - 事务消息：半消息 + 回查<br>
+                - 死信队列：消费重试兜底<br>
+                - 消息过滤：Broker 端减少无效网络传输
+            </div>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">消息队列在微服务架构中的最佳实践有哪些？有哪些反模式需要避免？</div>
+            <div class="qa-answer">
+                <strong>最佳实践：</strong><br>
+                ①<strong>Topic 命名规范：</strong>{业务域}-{动作}-{版本}，如 order-created-v1、payment-completed-v1<br>
+                ②<strong>消息体设计：</strong>使用 Schema（Avro/Protobuf）而非裸 JSON，保证向前向后兼容<br>
+                ③<strong>幂等设计前置：</strong>消费者从设计之初就按幂等实现，不要事后补<br>
+                ④<strong>监控三板斧：</strong>消费延迟(Lag) + 消费吞吐(TPS) + 失败率(Error Rate)，设置告警<br>
+                ⑤<strong>消息大小控制：</strong>正文 &lt; 1MB，大数据走对象存储（如S3），MQ只传引用<br><br>
+
+                <strong>反模式（Anti-Pattern）：</strong><br>
+                ①<strong>MQ当RPC用：</strong>同步等待MQ回复实现请求-响应，不如直接用 HTTP/gRPC<br>
+                ②<strong>超大消息：</strong>传10MB的文件内容到MQ，直接打爆Broker内存<br>
+                ③<strong>消费端无限重试：</strong>消费失败无限重试不进死信，导致消息堆积越来越多<br>
+                ④<strong>一个Topic万能化：</strong>所有事件塞一个Topic，不同消费者各取所需——导致互相影响、无法独立扩缩<br>
+                ⑤<strong>不监控Lag：</strong>消费堆积发现不及时，用户反馈才知道系统已经瘫痪
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== 页脚 ===== -->
+    <footer class="page-footer">
+        <p>消息队列面试圣经 — Kafka / RocketMQ / Pulsar 深度剖析</p>
+        <p>以 Jay Kreps 视角撰写 · 面向 Java 资深开发工程师面试准备</p>
+        <p>
+            核心架构对比 14 个知识点 · 高频考点 6 大类 · 深度原理 3 大专题 · 面试 QA 20+ 题
+        </p>
+    </footer>
+    </main>
+  </div>
+
+  <button class="back-to-top" aria-label="回到顶部">↑</button>
+  <script src="./shared/script.js"></script>
+</body>
+</html>

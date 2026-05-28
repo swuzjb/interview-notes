@@ -1,0 +1,2900 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>缓存与Redis · 面试深度指南 — antirez视角</title>
+<link rel="stylesheet" href="./shared/style.css">
+</head>
+<body>
+<div class="reading-progress"></div>
+<button class="theme-toggle" aria-label="切换主题">&#9788;</button>
+<button class="mobile-menu-btn" aria-label="菜单">&#9776;</button>
+<div class="sidebar-overlay"></div>
+
+<div class="page-wrapper">
+
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">Cache &amp; <span class="accent">Redis</span></div>
+    <div class="sidebar-subtitle">面试深度指南 · antirez 视角</div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-group">
+      <a href="#ch1" class="nav-group-title">一、缓存基础与核心概念</a>
+      <div class="nav-items">
+        <a href="#ch1-1">为什么需要缓存</a>
+        <a href="#ch1-2">缓存分层架构</a>
+        <a href="#ch1-3">本地缓存方案对比</a>
+        <a href="#ch1-4">Redis vs Memcached</a>
+        <a href="#ch1-5">线程模型与IO多路复用</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#ch2" class="nav-group-title">二、Redis数据结构与编码</a>
+      <div class="nav-items">
+        <a href="#ch2-1">SDS 动态字符串</a>
+        <a href="#ch2-2">五大类型与编码</a>
+        <a href="#ch2-2b">渐进式Rehash</a>
+        <a href="#ch2-3">跳跃表原理</a>
+        <a href="#ch2-4">紧凑型结构图解</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#ch3" class="nav-group-title">三、持久化机制</a>
+      <div class="nav-items">
+        <a href="#ch3-1">RDB 快照</a>
+        <a href="#ch3-2">AOF 日志</a>
+        <a href="#ch3-3">混合持久化</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#ch4" class="nav-group-title">四、内存管理与淘汰策略</a>
+      <div class="nav-items">
+        <a href="#ch4-1">过期删除策略</a>
+        <a href="#ch4-2">八种淘汰策略</a>
+        <a href="#ch4-3">LRU vs LFU 实现</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#ch5" class="nav-group-title">五、高可用架构</a>
+      <div class="nav-items">
+        <a href="#ch5-1">主从复制</a>
+        <a href="#ch5-2">Sentinel 哨兵</a>
+        <a href="#ch5-3">Cluster 集群</a>
+        <a href="#ch5-4">脑裂问题</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#ch6" class="nav-group-title">六、缓存一致性与经典问题</a>
+      <div class="nav-items">
+        <a href="#ch6-1">穿透/击穿/雪崩</a>
+        <a href="#ch6-2">双写一致性方案</a>
+        <a href="#ch6-3">延迟双删与MQ方案</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#ch7" class="nav-group-title">七、性能优化</a>
+      <div class="nav-items">
+        <a href="#ch7-1">Pipeline 与 Lua</a>
+        <a href="#ch7-2">大Key问题</a>
+        <a href="#ch7-3">热点Key方案</a>
+        <a href="#ch7-4">Redis 事务</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#ch8" class="nav-group-title">八、分布式锁</a>
+      <div class="nav-items">
+        <a href="#ch8-1">SETNX 基础方案</a>
+        <a href="#ch8-2">Redlock 算法</a>
+        <a href="#ch8-3">Redisson 实战</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#ch9" class="nav-group-title">九、生产实战与运维</a>
+      <div class="nav-items">
+        <a href="#ch9-0">面试追问链路图</a>
+        <a href="#ch9-1">容量规划与监控</a>
+        <a href="#ch9-2">连接池与Spring整合</a>
+        <a href="#ch9-3">线上事故案例</a>
+      </div>
+    </div>
+  </nav>
+</aside>
+
+<main class="main-content">
+
+<div class="page-hero">
+  <h1>缓存与 Redis 面试深度指南</h1>
+  <p class="subtitle">以 Redis 之父 Salvatore Sanfilippo (antirez) 的设计者视角，拆解每一个"为什么"</p>
+</div>
+
+<!-- ==================== 第一章 ==================== -->
+<section id="ch1">
+<h2>一、缓存基础与核心概念</h2>
+
+<div id="ch1-1">
+<h3>1.1 为什么需要缓存</h3>
+
+<p>想象你在图书馆查资料。每次都跑去地下仓库翻原始档案（数据库），还是把常翻的几本放在桌上（缓存）？答案显而易见。缓存的本质就是<strong>用空间换时间</strong>，把高频访问的数据放在离计算更近、速度更快的存储层。</p>
+
+<p>一个典型的 Web 应用，数据库查询耗时通常在 <em>1~50ms</em>，而 Redis 读取只需 <em>0.1~0.5ms</em>。当 QPS 达到数万时，这个差距就是系统能不能扛住的分水岭。</p>
+
+<div class="callout antirez">
+<p>我设计 Redis 时的核心理念：数据结构服务器，而不仅仅是一个 key-value cache。缓存只是 Redis 最简单的用法，但很多人止步于此。理解 Redis 的数据结构设计哲学，你会发现它能解决的问题远超缓存本身。</p>
+</div>
+
+<p>缓存存在的核心价值：</p>
+<ul>
+  <li><strong>降低延迟</strong>：内存访问 ~100ns，SSD ~100μs，网络数据库 ~1ms+，差距是数量级的</li>
+  <li><strong>减轻后端压力</strong>：数据库连接是稀缺资源，缓存能消化 80%+ 的读请求</li>
+  <li><strong>提升吞吐量</strong>：同样的硬件资源，加了缓存层可以承载 10x~100x 的并发</li>
+</ul>
+</div>
+
+<div id="ch1-2">
+<h3>1.2 缓存分层架构</h3>
+
+<p>现代系统的缓存不是单一层，而是<strong>多级递进</strong>的。就像 CPU 有 L1/L2/L3 缓存一样，应用层也需要分层缓存策略：</p>
+
+<div class="diagram">
+<svg width="750" height="320" viewBox="0 0 750 320" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background layers -->
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#dc3545;stop-opacity:0.2"/>
+      <stop offset="100%" style="stop-color:#dc3545;stop-opacity:0.05"/>
+    </linearGradient>
+    <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#d29922;stop-opacity:0.2"/>
+      <stop offset="100%" style="stop-color:#d29922;stop-opacity:0.05"/>
+    </linearGradient>
+    <linearGradient id="grad3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3fb950;stop-opacity:0.2"/>
+      <stop offset="100%" style="stop-color:#3fb950;stop-opacity:0.05"/>
+    </linearGradient>
+    <linearGradient id="grad4" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#58a6ff;stop-opacity:0.2"/>
+      <stop offset="100%" style="stop-color:#58a6ff;stop-opacity:0.05"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Layer boxes -->
+  <rect x="50" y="20" width="650" height="55" rx="8" fill="url(#grad1)" stroke="#dc3545" stroke-width="1.5"/>
+  <rect x="50" y="90" width="650" height="55" rx="8" fill="url(#grad2)" stroke="#d29922" stroke-width="1.5"/>
+  <rect x="50" y="160" width="650" height="55" rx="8" fill="url(#grad3)" stroke="#3fb950" stroke-width="1.5"/>
+  <rect x="50" y="230" width="650" height="55" rx="8" fill="url(#grad4)" stroke="#58a6ff" stroke-width="1.5"/>
+
+  <!-- Layer labels -->
+  <text x="75" y="52" fill="#dc3545" font-family="SF Pro Display, sans-serif" font-size="14" font-weight="bold">L1 浏览器/客户端缓存</text>
+  <text x="380" y="52" fill="#e6edf3" font-family="monospace" font-size="12">HTTP Cache-Control / LocalStorage / 200ms+</text>
+
+  <text x="75" y="122" fill="#d29922" font-family="SF Pro Display, sans-serif" font-size="14" font-weight="bold">L2 本地进程内缓存</text>
+  <text x="380" y="122" fill="#e6edf3" font-family="monospace" font-size="12">Caffeine / Guava Cache / ~1μs</text>
+
+  <text x="75" y="192" fill="#3fb950" font-family="SF Pro Display, sans-serif" font-size="14" font-weight="bold">L3 分布式缓存</text>
+  <text x="380" y="192" fill="#e6edf3" font-family="monospace" font-size="12">Redis / Memcached / ~0.5ms (含网络)</text>
+
+  <text x="75" y="262" fill="#58a6ff" font-family="SF Pro Display, sans-serif" font-size="14" font-weight="bold">L4 数据库</text>
+  <text x="380" y="262" fill="#e6edf3" font-family="monospace" font-size="12">MySQL / PostgreSQL / 1~50ms</text>
+
+  <!-- Arrows -->
+  <path d="M375 75 L375 90" stroke="#8b949e" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <path d="M375 145 L375 160" stroke="#8b949e" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <path d="M375 215 L375 230" stroke="#8b949e" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Speed indicator -->
+  <text x="720" y="52" fill="#dc3545" font-size="11" text-anchor="end">快</text>
+  <text x="720" y="262" fill="#58a6ff" font-size="11" text-anchor="end">慢</text>
+  <line x1="730" y1="35" x2="730" y2="270" stroke="#6e7681" stroke-width="1" stroke-dasharray="4"/>
+  <polygon points="730,30 726,38 734,38" fill="#dc3545"/>
+  <polygon points="730,275 726,267 734,267" fill="#58a6ff"/>
+
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#8b949e"/>
+    </marker>
+  </defs>
+</svg>
+<div class="diagram-caption">图：多级缓存分层架构 — 越靠近用户，延迟越低，但容量越小</div>
+</div>
+
+<p>分层设计的关键决策点：</p>
+<ul>
+  <li><strong>L2 本地缓存</strong>：无网络开销，适合热点数据、配置信息；缺点是多实例间数据不一致</li>
+  <li><strong>L3 分布式缓存</strong>：跨实例共享，适合会话、排行榜、计数器；代价是网络 RTT</li>
+  <li>生产环境中，<strong>L2 + L3 组合</strong>是主流方案，用 L2 扛极端热点，L3 兜底一致性</li>
+</ul>
+</div>
+
+<div id="ch1-3">
+<h3>1.3 本地缓存方案对比</h3>
+
+<p>Java 生态中主流的本地缓存方案有三个，能力差距不小：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>特性</th>
+      <th>Guava Cache</th>
+      <th>Caffeine</th>
+      <th>EhCache</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>淘汰算法</td>
+      <td>LRU (分段)</td>
+      <td><strong>W-TinyLFU</strong></td>
+      <td>LRU/LFU/FIFO</td>
+    </tr>
+    <tr>
+      <td>并发性能</td>
+      <td>好</td>
+      <td><strong>极好</strong> (无锁Ring Buffer)</td>
+      <td>一般</td>
+    </tr>
+    <tr>
+      <td>命中率</td>
+      <td>一般</td>
+      <td><strong>接近最优</strong></td>
+      <td>一般</td>
+    </tr>
+    <tr>
+      <td>堆外存储</td>
+      <td>不支持</td>
+      <td>不支持</td>
+      <td>支持</td>
+    </tr>
+    <tr>
+      <td>持久化</td>
+      <td>不支持</td>
+      <td>不支持</td>
+      <td>支持</td>
+    </tr>
+    <tr>
+      <td>Spring 集成</td>
+      <td>✓</td>
+      <td>✓ (Spring 默认)</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>推荐场景</td>
+      <td>旧项目兼容</td>
+      <td><strong>首选方案</strong></td>
+      <td>需要堆外/持久化</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout tip">
+<p>面试中被问到本地缓存，直接说"新项目用 Caffeine"，然后解释 W-TinyLFU 算法的优势：它在窗口区（Window Cache，约占总容量1%）用 LRU 捕捉突发热点，在主区（Main Cache）用 LFU 计频率淘汰冷数据，兼顾了两种策略的优点。频率统计使用 4-bit CountMin Sketch 实现，通过<strong>周期性衰减（aging）</strong>防止历史热点数据长期霸占缓存——每当计数器总和达到采样窗口大小（sampleSize，默认为 maximumSize × 10）时，所有计数器右移一位（即频率减半），使得近期的访问模式权重更高。这种设计让 Caffeine 在各类工作负载下命中率都接近理论最优（OPT）。</p>
+</div>
+
+<p><strong>Caffeine 使用示例：</strong></p>
+
+<pre data-lang="java"><code>// 创建一个最大容量10000、写入后5分钟过期的缓存
+Cache&lt;String, User&gt; userCache = Caffeine.newBuilder()
+    .maximumSize(10_000)                 // 最大条目数
+    .expireAfterWrite(5, TimeUnit.MINUTES) // 写入后过期
+    .recordStats()                        // 开启统计（命中率监控）
+    .build();
+
+// 读取，miss时自动加载
+User user = userCache.get(userId, key -&gt; {
+    return userRepository.findById(key); // 回源数据库
+});
+
+// 与Spring Boot集成（application.yml）
+// spring.cache.type=caffeine
+// spring.cache.caffeine.spec=maximumSize=5000,expireAfterWrite=300s</code></pre>
+</div>
+
+<div id="ch1-4">
+<h3>1.4 Redis vs Memcached</h3>
+
+<p>这是面试的经典开胃菜题。核心差异：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>维度</th>
+      <th>Redis</th>
+      <th>Memcached</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>数据结构</td>
+      <td><strong>丰富</strong> (String/Hash/List/Set/ZSet/Stream...)</td>
+      <td>仅 String (key-value)</td>
+    </tr>
+    <tr>
+      <td>线程模型</td>
+      <td>单线程命令执行 + 6.0后多线程IO</td>
+      <td>多线程</td>
+    </tr>
+    <tr>
+      <td>持久化</td>
+      <td>RDB + AOF</td>
+      <td><strong>无</strong>（纯内存）</td>
+    </tr>
+    <tr>
+      <td>集群方案</td>
+      <td>原生 Cluster</td>
+      <td>客户端一致性哈希</td>
+    </tr>
+    <tr>
+      <td>内存效率</td>
+      <td>有元数据开销，但 ziplist 等优化补偿</td>
+      <td>Slab 分配，有内部碎片</td>
+    </tr>
+    <tr>
+      <td>最大 value</td>
+      <td>512MB</td>
+      <td>1MB</td>
+    </tr>
+    <tr>
+      <td>Lua 脚本</td>
+      <td>✓ 原子执行</td>
+      <td>✗</td>
+    </tr>
+    <tr>
+      <td>发布订阅</td>
+      <td>✓</td>
+      <td>✗</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout antirez">
+<p>Memcached 是一个优秀的缓存系统，但它的设计目标是"快速的分布式内存对象缓存"——仅此而已。我设计 Redis 时的野心更大：我希望它成为一个<strong>可编程的数据结构服务器</strong>，缓存只是它最朴素的用法。丰富的数据结构让 Redis 能直接在服务端完成计算（排序、交集、排名），而不是把数据拉回客户端再处理。</p>
+</div>
+
+<p><strong>选型结论</strong>：2024 年的新项目，除非你有非常明确的理由（如纯缓存 + 极致多线程性能），否则选 Redis。Memcached 的适用场景已经极度收窄。</p>
+</div>
+
+<div id="ch1-5">
+<h3>1.5 Redis 线程模型与 IO 多路复用</h3>
+
+<p>面试中被问得最多的基础题之一："Redis 为什么这么快？"、"Redis 是单线程的吗？"。答案比大多数人以为的更有层次。</p>
+
+<h4>Redis 到底是不是单线程？</h4>
+
+<p>精确回答：<strong>命令执行是单线程的，但 Redis 整体不是单线程进程</strong>。</p>
+
+<ul>
+  <li><strong>主线程</strong>：网络IO + 命令执行（6.0 之前）/ 命令执行（6.0 之后）</li>
+  <li><strong>后台线程</strong>（bio）：关闭文件描述符、AOF fsync、惰性删除大 key（UNLINK）</li>
+  <li><strong>IO 线程</strong>（6.0+）：网络读写的多线程化</li>
+</ul>
+
+<h4>为什么命令执行坚持单线程？</h4>
+
+<div class="callout antirez">
+<p>Redis 的瓶颈从来不是 CPU，而是<strong>内存和网络带宽</strong>。单线程的好处是：</p>
+<p>1. <strong>无锁</strong>：所有数据结构操作不需要加锁，没有上下文切换开销<br>
+2. <strong>原子性天然保证</strong>：每条命令在执行期间不会被其他命令打断<br>
+3. <strong>实现简单</strong>：避免并发 bug，代码可维护性高<br>
+4. <strong>CPU 不是瓶颈</strong>：单线程每秒能处理 10w+ 命令，绝大多数场景够用了</p>
+</div>
+
+<h4>IO 多路复用（epoll/kqueue/select）</h4>
+
+<p>单线程能处理数万并发连接的秘密：<strong>IO 多路复用</strong>。一个线程监控所有 socket，哪个 socket 有数据就处理哪个，而不是一个连接一个线程阻塞等待。</p>
+
+<div class="diagram">
+<svg width="680" height="280" viewBox="0 0 680 280" xmlns="http://www.w3.org/2000/svg">
+  <!-- Client connections -->
+  <rect x="30" y="30" width="80" height="30" rx="4" fill="#1c2128" stroke="#58a6ff" stroke-width="1"/>
+  <text x="70" y="50" fill="#58a6ff" font-size="9" text-anchor="middle" font-family="monospace">Client 1</text>
+  <rect x="30" y="70" width="80" height="30" rx="4" fill="#1c2128" stroke="#58a6ff" stroke-width="1"/>
+  <text x="70" y="90" fill="#58a6ff" font-size="9" text-anchor="middle" font-family="monospace">Client 2</text>
+  <rect x="30" y="110" width="80" height="30" rx="4" fill="#1c2128" stroke="#58a6ff" stroke-width="1"/>
+  <text x="70" y="130" fill="#58a6ff" font-size="9" text-anchor="middle" font-family="monospace">Client 3</text>
+  <text x="70" y="165" fill="#6e7681" font-size="12" text-anchor="middle">...</text>
+  <rect x="30" y="175" width="80" height="30" rx="4" fill="#1c2128" stroke="#58a6ff" stroke-width="1"/>
+  <text x="70" y="195" fill="#58a6ff" font-size="9" text-anchor="middle" font-family="monospace">Client N</text>
+
+  <!-- Arrows to epoll -->
+  <line x1="110" y1="45" x2="200" y2="110" stroke="#8b949e" stroke-width="1"/>
+  <line x1="110" y1="85" x2="200" y2="110" stroke="#8b949e" stroke-width="1"/>
+  <line x1="110" y1="125" x2="200" y2="120" stroke="#8b949e" stroke-width="1"/>
+  <line x1="110" y1="190" x2="200" y2="140" stroke="#8b949e" stroke-width="1"/>
+
+  <!-- IO Multiplexer -->
+  <rect x="200" y="80" width="130" height="90" rx="8" fill="rgba(163,113,247,0.15)" stroke="#a371f7" stroke-width="2"/>
+  <text x="265" y="105" fill="#a371f7" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">IO 多路复用</text>
+  <text x="265" y="125" fill="#e6edf3" font-size="10" text-anchor="middle" font-family="monospace">epoll_wait()</text>
+  <text x="265" y="145" fill="#8b949e" font-size="9" text-anchor="middle" font-family="monospace">Linux: epoll</text>
+  <text x="265" y="160" fill="#8b949e" font-size="9" text-anchor="middle" font-family="monospace">macOS: kqueue</text>
+
+  <!-- Event Queue -->
+  <line x1="330" y1="125" x2="370" y2="125" stroke="#d29922" stroke-width="2" marker-end="url(#arrYR1)"/>
+
+  <rect x="370" y="95" width="100" height="60" rx="6" fill="rgba(210,153,34,0.1)" stroke="#d29922" stroke-width="1.5"/>
+  <text x="420" y="115" fill="#d29922" font-size="10" text-anchor="middle" font-family="monospace">事件队列</text>
+  <text x="420" y="135" fill="#8b949e" font-size="9" text-anchor="middle" font-family="monospace">就绪事件排队</text>
+  <text x="420" y="148" fill="#8b949e" font-size="9" text-anchor="middle" font-family="monospace">逐个dispatch</text>
+
+  <!-- Single Thread -->
+  <line x1="470" y1="125" x2="510" y2="125" stroke="#dc3545" stroke-width="2" marker-end="url(#arrRR1)"/>
+
+  <rect x="510" y="80" width="140" height="90" rx="8" fill="rgba(220,53,69,0.1)" stroke="#dc3545" stroke-width="2"/>
+  <text x="580" y="105" fill="#dc3545" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">单线程执行</text>
+  <text x="580" y="125" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">读请求→解析命令</text>
+  <text x="580" y="140" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">→执行命令→写响应</text>
+  <text x="580" y="158" fill="#3fb950" font-size="9" text-anchor="middle" font-family="monospace">串行无锁 高效</text>
+
+  <!-- Bottom annotation -->
+  <text x="340" y="220" fill="#8b949e" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">Reactor 模式：一个线程通过 IO 多路复用处理所有连接的事件</text>
+
+  <!-- 6.0 addition -->
+  <rect x="160" y="235" width="360" height="35" rx="6" fill="rgba(63,185,80,0.08)" stroke="#3fb950" stroke-width="1" stroke-dasharray="4"/>
+  <text x="340" y="257" fill="#3fb950" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">Redis 6.0+：IO读写交给多个IO线程，命令执行仍然是主线程串行</text>
+
+  <defs>
+    <marker id="arrYR1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#d29922"/></marker>
+    <marker id="arrRR1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#dc3545"/></marker>
+  </defs>
+</svg>
+<div class="diagram-caption">图：Redis 事件驱动模型 — IO多路复用 + 单线程命令执行（Reactor 模式）</div>
+</div>
+
+<h4>Redis 6.0 多线程 IO</h4>
+
+<p>Redis 6.0 引入了<strong>多线程网络 IO</strong>（默认关闭），但命令执行仍然是单线程。这解决了什么？</p>
+
+<ul>
+  <li>瓶颈分析：当 QPS 极高时，read()/write() 系统调用和协议解析占了主线程 50%+ 的时间</li>
+  <li>6.0 方案：主线程只负责命令执行，网络读写和协议解析分配给 N 个 IO 线程并行处理</li>
+  <li>效果：在多核机器上，开启多线程 IO 后吞吐量提升 <strong>1~2 倍</strong></li>
+</ul>
+
+<pre data-lang="redis"><code># redis.conf 开启多线程IO（Redis 6.0+）
+io-threads 4                # IO线程数（建议 = CPU核数-1，不超过8）
+io-threads-do-reads yes     # 读也用多线程（默认只多线程写）
+
+# 注意：命令执行仍然是单线程的！
+# 这意味着：KEYS *、大集合操作等仍然会阻塞所有客户端</code></pre>
+
+<div class="callout tip">
+<p>面试标准回答模板：<br>
+"Redis <strong>命令执行</strong>是单线程的，利用 IO 多路复用（epoll）处理高并发连接。快的原因有四个：纯内存操作、高效数据结构、IO 多路复用避免线程切换、单线程无锁竞争。6.0 之后引入了多线程 IO 来分担网络读写负担，但核心的命令执行逻辑没变，所以仍然保持了原子性和简单性。"</p>
+</div>
+</div>
+
+</section>
+
+<!-- ==================== 第二章 ==================== -->
+<section id="ch2">
+<h2>二、Redis 数据结构与底层编码</h2>
+
+<div id="ch2-1">
+<h3>2.1 SDS — 简单动态字符串</h3>
+
+<p>Redis 没有直接用 C 语言的 <code>char*</code> 字符串，而是自己实现了 <strong>SDS (Simple Dynamic String)</strong>。这是面试必考点——因为它体现了 antirez "为性能服务的工程思维"。为什么不能用 C 原生字符串？三个致命缺陷：</p>
+
+<ul>
+  <li><strong>二进制不安全</strong>：C 字符串以 <code>\0</code> 作为结尾标志，无法存储包含 <code>\0</code> 的二进制数据（如图片、序列化对象）。SDS 用 <code>len</code> 字段标识长度，可以存储任意二进制内容。</li>
+  <li><strong>获取长度 O(n)</strong>：C 字符串需要遍历到 <code>\0</code> 才能知道长度。Redis 频繁需要字符串长度信息（如 STRLEN、协议拼装），O(n) 不可接受。SDS 直接读 <code>len</code> 字段，O(1)。</li>
+  <li><strong>缓冲区溢出风险</strong>：C 的 <code>strcat</code> 等函数不检查目标空间是否足够，溢出就是安全漏洞。SDS 在每次修改前自动检查并扩容，从根本上杜绝了溢出。</li>
+</ul>
+
+<h4>SDS 的内存结构</h4>
+
+<div class="diagram">
+<svg width="650" height="180" viewBox="0 0 650 180" xmlns="http://www.w3.org/2000/svg">
+  <!-- SDS struct -->
+  <rect x="30" y="40" width="80" height="50" rx="4" fill="#1c2128" stroke="#d29922" stroke-width="1.5"/>
+  <text x="70" y="60" fill="#d29922" font-size="10" text-anchor="middle" font-family="monospace">len</text>
+  <text x="70" y="78" fill="#e6edf3" font-size="13" text-anchor="middle" font-family="monospace" font-weight="bold">5</text>
+
+  <rect x="115" y="40" width="80" height="50" rx="4" fill="#1c2128" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="155" y="60" fill="#3fb950" font-size="10" text-anchor="middle" font-family="monospace">alloc</text>
+  <text x="155" y="78" fill="#e6edf3" font-size="13" text-anchor="middle" font-family="monospace" font-weight="bold">8</text>
+
+  <rect x="200" y="40" width="50" height="50" rx="4" fill="#1c2128" stroke="#a371f7" stroke-width="1.5"/>
+  <text x="225" y="60" fill="#a371f7" font-size="10" text-anchor="middle" font-family="monospace">flags</text>
+  <text x="225" y="78" fill="#e6edf3" font-size="13" text-anchor="middle" font-family="monospace" font-weight="bold">1</text>
+
+  <!-- buf array -->
+  <rect x="280" y="40" width="35" height="50" rx="4" fill="#2d1b1b" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="297" y="70" fill="#e6edf3" font-size="14" text-anchor="middle" font-family="monospace">'h'</text>
+
+  <rect x="320" y="40" width="35" height="50" rx="4" fill="#2d1b1b" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="337" y="70" fill="#e6edf3" font-size="14" text-anchor="middle" font-family="monospace">'e'</text>
+
+  <rect x="360" y="40" width="35" height="50" rx="4" fill="#2d1b1b" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="377" y="70" fill="#e6edf3" font-size="14" text-anchor="middle" font-family="monospace">'l'</text>
+
+  <rect x="400" y="40" width="35" height="50" rx="4" fill="#2d1b1b" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="417" y="70" fill="#e6edf3" font-size="14" text-anchor="middle" font-family="monospace">'l'</text>
+
+  <rect x="440" y="40" width="35" height="50" rx="4" fill="#2d1b1b" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="457" y="70" fill="#e6edf3" font-size="14" text-anchor="middle" font-family="monospace">'o'</text>
+
+  <rect x="480" y="40" width="35" height="50" rx="4" fill="#1a2332" stroke="#30363d" stroke-width="1"/>
+  <text x="497" y="70" fill="#6e7681" font-size="14" text-anchor="middle" font-family="monospace">'\0'</text>
+
+  <rect x="520" y="40" width="35" height="50" rx="4" fill="#1a2332" stroke="#30363d" stroke-width="1" stroke-dasharray="4"/>
+  <text x="537" y="70" fill="#6e7681" font-size="11" text-anchor="middle" font-family="monospace">free</text>
+
+  <rect x="560" y="40" width="35" height="50" rx="4" fill="#1a2332" stroke="#30363d" stroke-width="1" stroke-dasharray="4"/>
+  <text x="577" y="70" fill="#6e7681" font-size="11" text-anchor="middle" font-family="monospace">free</text>
+
+  <!-- Labels -->
+  <text x="155" y="25" fill="#8b949e" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif">SDS Header</text>
+  <text x="430" y="25" fill="#dc3545" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif">buf[] 实际数据</text>
+  <text x="548" y="25" fill="#6e7681" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif">预分配空间</text>
+
+  <!-- Pointer arrow -->
+  <line x1="297" y1="120" x2="297" y2="95" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <text x="297" y="138" fill="#58a6ff" font-size="11" text-anchor="middle" font-family="monospace">sds pointer (指向buf首地址)</text>
+
+  <defs>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+    </marker>
+  </defs>
+</svg>
+<div class="diagram-caption">图：SDS 内存布局 — header 紧挨 buf，指针直接指向 buf 首地址，向前偏移即可读取 header</div>
+</div>
+
+<h4>SDS vs C 字符串对比</h4>
+
+<table>
+  <thead>
+    <tr>
+      <th>特性</th>
+      <th>C 字符串 (char*)</th>
+      <th>SDS</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>获取长度</td>
+      <td>O(n) 遍历到 \0</td>
+      <td><strong>O(1)</strong> 直接读 len</td>
+    </tr>
+    <tr>
+      <td>缓冲区溢出</td>
+      <td>不检查，容易溢出</td>
+      <td>自动扩容，<strong>杜绝溢出</strong></td>
+    </tr>
+    <tr>
+      <td>修改时内存分配</td>
+      <td>每次修改都 realloc</td>
+      <td><strong>空间预分配 + 惰性释放</strong></td>
+    </tr>
+    <tr>
+      <td>二进制安全</td>
+      <td>不安全（\0 截断）</td>
+      <td><strong>安全</strong>（用 len 判断结尾）</td>
+    </tr>
+    <tr>
+      <td>兼容 C 字符串函数</td>
+      <td>完全兼容</td>
+      <td>兼容（末尾有 \0）</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout antirez">
+<p>空间预分配策略的设计考量：当 SDS 修改后长度 &lt; 1MB 时，分配 2 倍空间；≥ 1MB 时，每次多分配 1MB。这是一个典型的"空间换时间"权衡——连续的 APPEND 操作从 O(n²) 降到了摊销 O(n)。为什么 1MB 作为分界线？因为大多数 Redis value 远小于 1MB，而超过 1MB 的 value 通常是稳定不变的，不需要激进的预分配。</p>
+</div>
+
+<pre data-lang="c"><code>// Redis源码：SDS扩容核心逻辑（sds.c）
+sds sdsMakeRoomFor(sds s, size_t addlen) {
+    size_t avail = sdsavail(s);  // 当前剩余空间
+    if (avail >= addlen) return s; // 空间够用，不扩容
+
+    size_t len = sdslen(s);
+    size_t newlen = len + addlen;
+
+    // 关键：预分配策略
+    if (newlen &lt; SDS_MAX_PREALLOC)  // SDS_MAX_PREALLOC = 1MB
+        newlen *= 2;                 // &lt; 1MB: 翻倍
+    else
+        newlen += SDS_MAX_PREALLOC;  // >= 1MB: +1MB
+
+    // ... realloc 并更新 header
+}</code></pre>
+</div>
+
+<div id="ch2-2">
+<h3>2.2 五大数据类型与底层编码</h3>
+
+<p>Redis 对外暴露 5 种（加上 Stream 是 6 种）数据类型，但每种类型的底层实现会根据数据量自动切换编码，以在<strong>小数据量时省内存，大数据量时保性能</strong>。这是 Redis 内存效率的核心秘密。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>数据类型</th>
+      <th>底层编码</th>
+      <th>转换条件（默认配置）</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td rowspan="3"><strong>String</strong></td>
+      <td>int</td>
+      <td>值为整数且 ≤ long 范围</td>
+    </tr>
+    <tr>
+      <td>embstr</td>
+      <td>字符串 ≤ 44字节（SDS header+数据一次分配）</td>
+    </tr>
+    <tr>
+      <td>raw</td>
+      <td>字符串 > 44字节</td>
+    </tr>
+    <tr>
+      <td rowspan="2"><strong>List</strong></td>
+      <td>listpack (旧版ziplist)</td>
+      <td>元素数 ≤ 128 且每个元素 ≤ 64字节</td>
+    </tr>
+    <tr>
+      <td>quicklist</td>
+      <td>超出上述条件</td>
+    </tr>
+    <tr>
+      <td rowspan="2"><strong>Hash</strong></td>
+      <td>listpack (旧版ziplist)</td>
+      <td>field数 ≤ 128 且每个value ≤ 64字节</td>
+    </tr>
+    <tr>
+      <td>hashtable</td>
+      <td>超出上述条件</td>
+    </tr>
+    <tr>
+      <td rowspan="2"><strong>Set</strong></td>
+      <td>intset</td>
+      <td>全为整数且元素数 ≤ 512</td>
+    </tr>
+    <tr>
+      <td>hashtable</td>
+      <td>含非整数或超出数量</td>
+    </tr>
+    <tr>
+      <td rowspan="2"><strong>ZSet</strong></td>
+      <td>listpack (旧版ziplist)</td>
+      <td>元素数 ≤ 128 且每个元素 ≤ 64字节</td>
+    </tr>
+    <tr>
+      <td>skiplist + hashtable</td>
+      <td>超出上述条件</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+<p>面试常见误区：很多人说"List 底层是双向链表或 ziplist"。这在 Redis 3.2 之前是对的，但 3.2+ 引入了 quicklist（ziplist 的链表），7.0+ 又用 listpack 替代了 ziplist。回答时要注明版本。</p>
+</div>
+
+<h4>为什么 embstr 的阈值是 44 字节？</h4>
+
+<p>这是一道高频追问题。Redis 的内存分配器（jemalloc）按 8/16/32/64 字节等档位分配。一个 embstr 编码的 robj 包含：</p>
+
+<pre data-lang="text"><code>redisObject 头: 16 字节 (type:4 + encoding:4 + lru:24 + refcount:32 + *ptr:64)
+SDS header:    3 字节 (sdshdr8: len:1 + alloc:1 + flags:1)
+结尾 '\0':     1 字节
+合计固定开销:   20 字节
+
+jemalloc 一次分配 64 字节 → 64 - 20 = 44 字节可用于数据</code></pre>
+
+<p>这样 embstr 类型的 redisObject 和 SDS 可以在<strong>一次内存分配</strong>中连续存储，对 CPU cache 友好，减少内存碎片。超过 44 字节就必须两次分配（raw 编码），指针跳转 = cache miss。</p>
+
+<div class="callout antirez">
+<p>我对编码切换的设计哲学是：<strong>让小对象极度紧凑，让大对象保持高效</strong>。ziplist/listpack 在元素少时内存连续、cache 友好，但一旦元素多了，每次插入都要 O(n) 搬移数据就不可接受了。所以需要一个触发点去切换到更适合的结构。这个阈值不是拍脑袋——是根据 CPU cache line (64B) 和 jemalloc 分配策略反推出来的。</p>
+</div>
+
+<h4>渐进式 Rehash（Hash 类型高频考点）</h4>
+
+<p>Redis 的 Hash 类型底层用 <strong>dict</strong>（哈希表）存储。当负载因子（used/size）过高或过低时需要扩容/缩容。但一个百万级 key 的 dict 做 rehash，如果一次性完成，会阻塞主线程数秒。Redis 的解决方案：<strong>渐进式 rehash</strong>。</p>
+
+<div class="diagram">
+<svg width="650" height="200" viewBox="0 0 650 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- ht[0] -->
+  <rect x="50" y="30" width="240" height="130" rx="6" fill="rgba(220,53,69,0.08)" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="170" y="22" fill="#dc3545" font-size="11" text-anchor="middle" font-family="monospace" font-weight="bold">ht[0] (旧表)</text>
+  <rect x="65" y="50" width="50" height="25" rx="3" fill="#1c2128" stroke="#6e7681" stroke-width="1"/>
+  <text x="90" y="67" fill="#6e7681" font-size="9" text-anchor="middle" font-family="monospace">[0]→</text>
+  <rect x="65" y="80" width="50" height="25" rx="3" fill="#1c2128" stroke="#6e7681" stroke-width="1"/>
+  <text x="90" y="97" fill="#6e7681" font-size="9" text-anchor="middle" font-family="monospace">[1]→</text>
+  <rect x="65" y="110" width="50" height="25" rx="3" fill="#2d1b1b" stroke="#d29922" stroke-width="1.5"/>
+  <text x="90" y="127" fill="#d29922" font-size="9" text-anchor="middle" font-family="monospace">[2]→</text>
+  <rect x="65" y="140" width="50" height="25" rx="3" fill="#2d1b1b" stroke="#d29922" stroke-width="1.5"/>
+  <text x="90" y="157" fill="#d29922" font-size="9" text-anchor="middle" font-family="monospace">[3]→</text>
+
+  <!-- rehashidx arrow -->
+  <text x="140" y="125" fill="#d29922" font-size="10" font-family="monospace">← rehashidx=2</text>
+  <text x="140" y="68" fill="#3fb950" font-size="9" font-family="monospace">已迁移完</text>
+  <text x="140" y="155" fill="#dc3545" font-size="9" font-family="monospace">待迁移</text>
+
+  <!-- Arrow -->
+  <text x="320" y="100" fill="#8b949e" font-size="20" text-anchor="middle">→</text>
+  <text x="320" y="120" fill="#8b949e" font-size="9" text-anchor="middle" font-family="monospace">每次操作</text>
+  <text x="320" y="132" fill="#8b949e" font-size="9" text-anchor="middle" font-family="monospace">迁移1个桶</text>
+
+  <!-- ht[1] -->
+  <rect x="370" y="30" width="250" height="130" rx="6" fill="rgba(63,185,80,0.08)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="495" y="22" fill="#3fb950" font-size="11" text-anchor="middle" font-family="monospace" font-weight="bold">ht[1] (新表，2倍大小)</text>
+  <rect x="385" y="50" width="40" height="20" rx="3" fill="#1c2128" stroke="#3fb950" stroke-width="1"/>
+  <rect x="430" y="50" width="40" height="20" rx="3" fill="#1c2128" stroke="#3fb950" stroke-width="1"/>
+  <rect x="475" y="50" width="40" height="20" rx="3" fill="#1c2128" stroke="#3fb950" stroke-width="1"/>
+  <rect x="520" y="50" width="40" height="20" rx="3" fill="#1c2128" stroke="#3fb950" stroke-width="1"/>
+  <rect x="565" y="50" width="40" height="20" rx="3" fill="#1c2128" stroke="#3fb950" stroke-width="1"/>
+  <rect x="385" y="80" width="40" height="20" rx="3" fill="#1c2128" stroke="#30363d" stroke-width="1"/>
+  <rect x="430" y="80" width="40" height="20" rx="3" fill="#1c2128" stroke="#30363d" stroke-width="1"/>
+  <rect x="475" y="80" width="40" height="20" rx="3" fill="#1c2128" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Note -->
+  <text x="325" y="185" fill="#8b949e" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">渐进式：每次 CRUD 操作顺带迁移 ht[0] 的一个桶到 ht[1]，分摊到每个请求中</text>
+</svg>
+<div class="diagram-caption">图：渐进式 Rehash — 两个哈希表并存，每次操作迁移一个桶，查找时先查 ht[0] 再查 ht[1]</div>
+</div>
+
+<p><strong>渐进式 rehash 的规则</strong>：</p>
+<ul>
+  <li>dict 维护两个哈希表 ht[0] 和 ht[1]，以及 rehashidx 指针</li>
+  <li>每次对 dict 的增删改查操作，都会顺带将 ht[0].table[rehashidx] 上的所有节点迁移到 ht[1]</li>
+  <li>rehash 期间：新增只写 ht[1]；查找先查 ht[0]，没有再查 ht[1]</li>
+  <li>serverCron 定时任务中也会辅助迁移（每次 1ms 限时内尽量多搬）</li>
+  <li>全部迁移完成后释放 ht[0]，ht[1] 变为 ht[0]</li>
+</ul>
+
+<div class="callout tip">
+<p>面试追问："渐进式 rehash 期间，扩容触发条件是什么？"<br>
+- 正常情况：<code>负载因子 ≥ 1</code>（used/size ≥ 1）时扩容<br>
+- 执行 BGSAVE/BGREWRITEAOF 期间：<code>负载因子 ≥ 5</code> 才扩容（因为 fork 后要尽量少触发 COW）</p>
+</div>
+</div>
+
+<div id="ch2-3">
+<h3>2.3 跳跃表（Skip List）— ZSet 的灵魂</h3>
+
+<p>面试高频题："Redis 的 ZSet 为什么用跳跃表而不是红黑树？"。先理解跳表本身，答案就自然浮现。</p>
+
+<h4>跳跃表原理</h4>
+
+<p>跳跃表本质是<strong>多层有序链表</strong>。底层包含所有元素，每往上一层随机"提拔"约一半节点作为索引，查找时从最高层开始，逐层缩小范围——实现 O(log n) 的查找、插入、删除。</p>
+
+<div class="diagram">
+<svg width="700" height="240" viewBox="0 0 700 240" xmlns="http://www.w3.org/2000/svg">
+  <!-- Level labels -->
+  <text x="15" y="45" fill="#dc3545" font-size="11" font-family="monospace">L3</text>
+  <text x="15" y="95" fill="#d29922" font-size="11" font-family="monospace">L2</text>
+  <text x="15" y="145" fill="#3fb950" font-size="11" font-family="monospace">L1</text>
+  <text x="15" y="195" fill="#58a6ff" font-size="11" font-family="monospace">L0</text>
+
+  <!-- HEAD node -->
+  <rect x="50" y="30" width="40" height="180" rx="4" fill="#1c2128" stroke="#6e7681" stroke-width="1"/>
+  <text x="70" y="115" fill="#6e7681" font-size="10" text-anchor="middle" font-family="monospace">HEAD</text>
+
+  <!-- Node 3 -->
+  <rect x="150" y="130" width="45" height="80" rx="4" fill="#1c2128" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="172" y="175" fill="#e6edf3" font-size="13" text-anchor="middle" font-family="monospace" font-weight="bold">3</text>
+
+  <!-- Node 7 -->
+  <rect x="250" y="80" width="45" height="130" rx="4" fill="#1c2128" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="272" y="175" fill="#e6edf3" font-size="13" text-anchor="middle" font-family="monospace" font-weight="bold">7</text>
+
+  <!-- Node 12 -->
+  <rect x="350" y="130" width="45" height="80" rx="4" fill="#1c2128" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="372" y="175" fill="#e6edf3" font-size="13" text-anchor="middle" font-family="monospace" font-weight="bold">12</text>
+
+  <!-- Node 19 -->
+  <rect x="450" y="30" width="45" height="180" rx="4" fill="#1c2128" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="472" y="175" fill="#e6edf3" font-size="13" text-anchor="middle" font-family="monospace" font-weight="bold">19</text>
+
+  <!-- Node 25 -->
+  <rect x="550" y="80" width="45" height="130" rx="4" fill="#1c2128" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="572" y="175" fill="#e6edf3" font-size="13" text-anchor="middle" font-family="monospace" font-weight="bold">25</text>
+
+  <!-- NIL -->
+  <rect x="640" y="30" width="40" height="180" rx="4" fill="#1c2128" stroke="#6e7681" stroke-width="1" stroke-dasharray="4"/>
+  <text x="660" y="115" fill="#6e7681" font-size="10" text-anchor="middle" font-family="monospace">NIL</text>
+
+  <!-- L3 arrows (HEAD -> 19 -> NIL) -->
+  <line x1="90" y1="42" x2="450" y2="42" stroke="#dc3545" stroke-width="1.5" marker-end="url(#arrRed)"/>
+  <line x1="495" y1="42" x2="640" y2="42" stroke="#dc3545" stroke-width="1.5" marker-end="url(#arrRed)"/>
+
+  <!-- L2 arrows (HEAD -> 7 -> 19 -> 25 -> NIL) -->
+  <line x1="90" y1="92" x2="250" y2="92" stroke="#d29922" stroke-width="1.5" marker-end="url(#arrYellow)"/>
+  <line x1="295" y1="92" x2="450" y2="92" stroke="#d29922" stroke-width="1.5" marker-end="url(#arrYellow)"/>
+  <line x1="495" y1="92" x2="550" y2="92" stroke="#d29922" stroke-width="1.5" marker-end="url(#arrYellow)"/>
+  <line x1="595" y1="92" x2="640" y2="92" stroke="#d29922" stroke-width="1.5" marker-end="url(#arrYellow)"/>
+
+  <!-- L1 arrows (HEAD -> 3 -> 7 -> 12 -> 19 -> 25 -> NIL) -->
+  <line x1="90" y1="142" x2="150" y2="142" stroke="#3fb950" stroke-width="1.2" marker-end="url(#arrGreen)"/>
+  <line x1="195" y1="142" x2="250" y2="142" stroke="#3fb950" stroke-width="1.2" marker-end="url(#arrGreen)"/>
+  <line x1="295" y1="142" x2="350" y2="142" stroke="#3fb950" stroke-width="1.2" marker-end="url(#arrGreen)"/>
+  <line x1="395" y1="142" x2="450" y2="142" stroke="#3fb950" stroke-width="1.2" marker-end="url(#arrGreen)"/>
+  <line x1="495" y1="142" x2="550" y2="142" stroke="#3fb950" stroke-width="1.2" marker-end="url(#arrGreen)"/>
+  <line x1="595" y1="142" x2="640" y2="142" stroke="#3fb950" stroke-width="1.2" marker-end="url(#arrGreen)"/>
+
+  <!-- L0 arrows (same as L1 for simplicity in diagram) -->
+  <line x1="90" y1="192" x2="150" y2="192" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#arrBlue2)"/>
+  <line x1="195" y1="192" x2="250" y2="192" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#arrBlue2)"/>
+  <line x1="295" y1="192" x2="350" y2="192" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#arrBlue2)"/>
+  <line x1="395" y1="192" x2="450" y2="192" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#arrBlue2)"/>
+  <line x1="495" y1="192" x2="550" y2="192" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#arrBlue2)"/>
+  <line x1="595" y1="192" x2="640" y2="192" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#arrBlue2)"/>
+
+  <!-- Search path highlight: finding 12 -->
+  <rect x="42" y="225" width="650" height="0" fill="none"/>
+  <text x="350" y="232" fill="#8b949e" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">查找12的路径：HEAD→L3到19(太大)→退回L2到7→L1到12 ✓ — 仅需3次比较</text>
+
+  <defs>
+    <marker id="arrRed" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#dc3545"/>
+    </marker>
+    <marker id="arrYellow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#d29922"/>
+    </marker>
+    <marker id="arrGreen" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="arrBlue2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/>
+    </marker>
+  </defs>
+</svg>
+<div class="diagram-caption">图：跳跃表结构 — 多层索引加速查找，每层是有序链表的子集</div>
+</div>
+
+<h4>为什么选跳表不选红黑树？（高频面试题）</h4>
+
+<div class="callout antirez">
+<p>这个问题我在 Redis 邮件列表中亲自回答过。原因有三：</p>
+<p>1. <strong>实现简单</strong>：跳表的插入删除代码大约是红黑树的 1/3，bug 更少，维护更容易。红黑树的旋转和变色规则复杂，我更喜欢能一眼看明白的代码。</p>
+<p>2. <strong>范围查找天然高效</strong>：ZSet 大量操作是 ZRANGEBYSCORE/ZRANGEBYLEX 这类范围查询。跳表找到起点后顺着 L0 链表扫就行，内存地址虽不连续但遍历逻辑简单；红黑树需要中序遍历（左-根-右反复跳转），且节点分散在内存各处，对 CPU prefetch 不友好。</p>
+<p>3. <strong>并发友好</strong>（虽然 Redis 是单线程）：跳表的局部修改只涉及相邻节点的指针变更，如果未来要加锁，锁的粒度可以做到单个节点级别。红黑树的旋转可能涉及多个不相邻节点的变更，锁粒度难以细化。ConcurrentSkipListMap 正是基于这个特性实现的。</p>
+<p>额外一点：跳表的空间开销平均是每个节点 1.33 个指针（期望层高 1/(1-p)，p=0.25），而红黑树每个节点固定3个指针（left, right, parent）+ 1bit颜色标志。</p>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>对比项</th>
+      <th>跳跃表</th>
+      <th>红黑树</th>
+      <th>B+树</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>查找</td>
+      <td>O(log n) 平均</td>
+      <td>O(log n) 最坏</td>
+      <td>O(log n)</td>
+    </tr>
+    <tr>
+      <td>范围查询</td>
+      <td><strong>极好</strong>（链表顺序遍历）</td>
+      <td>一般（中序遍历）</td>
+      <td>极好（叶子链表）</td>
+    </tr>
+    <tr>
+      <td>实现复杂度</td>
+      <td><strong>低</strong></td>
+      <td>高（旋转+变色）</td>
+      <td>高（分裂+合并）</td>
+    </tr>
+    <tr>
+      <td>内存占用</td>
+      <td>平均 1.33 个指针/节点</td>
+      <td>3 个指针/节点</td>
+      <td>紧凑</td>
+    </tr>
+    <tr>
+      <td>适用场景</td>
+      <td>内存数据库</td>
+      <td>内核、容器库</td>
+      <td>磁盘数据库</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div id="ch2-4">
+<h3>2.4 紧凑型数据结构：ziplist / listpack / quicklist</h3>
+
+<p>这组结构是 Redis 省内存的核心武器。面试要搞清楚它们的<strong>演进关系</strong>和<strong>设计动机</strong>。</p>
+
+<h4>ziplist（已废弃，但面试仍考）</h4>
+
+<p>ziplist 是一段<strong>连续内存</strong>上的紧凑编码列表。没有指针开销，所有元素紧密排列：</p>
+
+<div class="diagram">
+<svg width="680" height="130" viewBox="0 0 680 130" xmlns="http://www.w3.org/2000/svg">
+  <!-- Header -->
+  <rect x="20" y="40" width="70" height="50" rx="4" fill="#1c2128" stroke="#a371f7" stroke-width="1.5"/>
+  <text x="55" y="60" fill="#a371f7" font-size="9" text-anchor="middle" font-family="monospace">zlbytes</text>
+  <text x="55" y="78" fill="#e6edf3" font-size="11" text-anchor="middle" font-family="monospace">4B</text>
+
+  <rect x="95" y="40" width="60" height="50" rx="4" fill="#1c2128" stroke="#a371f7" stroke-width="1.5"/>
+  <text x="125" y="60" fill="#a371f7" font-size="9" text-anchor="middle" font-family="monospace">zltail</text>
+  <text x="125" y="78" fill="#e6edf3" font-size="11" text-anchor="middle" font-family="monospace">4B</text>
+
+  <rect x="160" y="40" width="50" height="50" rx="4" fill="#1c2128" stroke="#a371f7" stroke-width="1.5"/>
+  <text x="185" y="60" fill="#a371f7" font-size="9" text-anchor="middle" font-family="monospace">zllen</text>
+  <text x="185" y="78" fill="#e6edf3" font-size="11" text-anchor="middle" font-family="monospace">2B</text>
+
+  <!-- Entries -->
+  <rect x="230" y="40" width="110" height="50" rx="4" fill="#2d1b1b" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="285" y="58" fill="#dc3545" font-size="9" text-anchor="middle" font-family="monospace">entry1</text>
+  <text x="285" y="78" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">prevlen|encoding|data</text>
+
+  <rect x="345" y="40" width="110" height="50" rx="4" fill="#2d1b1b" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="400" y="58" fill="#dc3545" font-size="9" text-anchor="middle" font-family="monospace">entry2</text>
+  <text x="400" y="78" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">prevlen|encoding|data</text>
+
+  <rect x="460" y="40" width="110" height="50" rx="4" fill="#2d1b1b" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="515" y="58" fill="#dc3545" font-size="9" text-anchor="middle" font-family="monospace">entry3</text>
+  <text x="515" y="78" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">prevlen|encoding|data</text>
+
+  <!-- End -->
+  <rect x="575" y="40" width="50" height="50" rx="4" fill="#1c2128" stroke="#6e7681" stroke-width="1.5"/>
+  <text x="600" y="60" fill="#6e7681" font-size="9" text-anchor="middle" font-family="monospace">zlend</text>
+  <text x="600" y="78" fill="#e6edf3" font-size="11" text-anchor="middle" font-family="monospace">0xFF</text>
+
+  <!-- Label -->
+  <text x="350" y="25" fill="#8b949e" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif">连续内存块 — 无指针开销，极度紧凑</text>
+  <text x="350" y="115" fill="#d29922" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">⚠️ 问题：prevlen 变长编码可能引发「连锁更新」(cascade update)</text>
+</svg>
+<div class="diagram-caption">图：ziplist 内存布局 — 所有数据连续存储在一块内存中</div>
+</div>
+
+<p><strong>连锁更新问题</strong>：每个 entry 的 <code>prevlen</code> 字段记录前一个 entry 的长度。如果前一个 entry 长度从 &lt; 254 变为 ≥ 254，prevlen 从 1 字节膨胀为 5 字节，可能导致后续 entry 连锁膨胀。最坏情况 O(n²)。</p>
+
+<h4>listpack（Redis 7.0+ 替代 ziplist）</h4>
+
+<p>listpack 的改进很简单但巧妙：<strong>每个 entry 记录自己的长度而不是前一个的长度</strong>，从根本上消除了连锁更新。</p>
+
+<h4>quicklist — List 类型的最终形态</h4>
+
+<p>quicklist = <strong>双向链表 + 每个节点是一个 ziplist/listpack</strong>。兼顾了链表的快速插入和紧凑编码的内存效率：</p>
+
+<div class="diagram">
+<svg width="700" height="160" viewBox="0 0 700 160" xmlns="http://www.w3.org/2000/svg">
+  <!-- Node 1 -->
+  <rect x="50" y="40" width="150" height="80" rx="8" fill="#1c2128" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="125" y="62" fill="#3fb950" font-size="10" text-anchor="middle" font-family="monospace">quicklistNode</text>
+  <rect x="65" y="72" width="120" height="35" rx="4" fill="#2d1b1b" stroke="#dc3545" stroke-width="1"/>
+  <text x="125" y="94" fill="#e6edf3" font-size="10" text-anchor="middle" font-family="monospace">listpack (≤8KB)</text>
+
+  <!-- Arrow 1->2 -->
+  <line x1="200" y1="80" x2="250" y2="80" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrGray)"/>
+  <line x1="250" y1="80" x2="200" y2="80" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrGray)"/>
+
+  <!-- Node 2 -->
+  <rect x="260" y="40" width="150" height="80" rx="8" fill="#1c2128" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="335" y="62" fill="#3fb950" font-size="10" text-anchor="middle" font-family="monospace">quicklistNode</text>
+  <rect x="275" y="72" width="120" height="35" rx="4" fill="#2d1b1b" stroke="#dc3545" stroke-width="1"/>
+  <text x="335" y="94" fill="#e6edf3" font-size="10" text-anchor="middle" font-family="monospace">listpack (≤8KB)</text>
+
+  <!-- Arrow 2->3 -->
+  <line x1="410" y1="80" x2="460" y2="80" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrGray)"/>
+  <line x1="460" y1="80" x2="410" y2="80" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrGray)"/>
+
+  <!-- Node 3 -->
+  <rect x="470" y="40" width="150" height="80" rx="8" fill="#1c2128" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="545" y="62" fill="#3fb950" font-size="10" text-anchor="middle" font-family="monospace">quicklistNode</text>
+  <rect x="485" y="72" width="120" height="35" rx="4" fill="#2d1b1b" stroke="#dc3545" stroke-width="1"/>
+  <text x="545" y="94" fill="#e6edf3" font-size="10" text-anchor="middle" font-family="monospace">listpack (≤8KB)</text>
+
+  <text x="350" y="145" fill="#8b949e" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">双向链表串联 — 每个节点内部是紧凑的 listpack，可选 LZF 压缩中间节点</text>
+
+  <defs>
+    <marker id="arrGray" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#8b949e"/>
+    </marker>
+  </defs>
+</svg>
+<div class="diagram-caption">图：quicklist = 双向链表 of listpacks — 兼顾内存紧凑与操作效率</div>
+</div>
+
+<pre data-lang="redis"><code># 查看编码信息
+127.0.0.1:6379&gt; RPUSH mylist a b c
+(integer) 3
+127.0.0.1:6379&gt; OBJECT ENCODING mylist
+"listpack"                              -- 元素少时用 listpack
+
+127.0.0.1:6379&gt; RPUSH mylist $(python -c "print('x'*65)")  -- 加一个超长元素
+127.0.0.1:6379&gt; OBJECT ENCODING mylist
+"quicklist"                             -- 自动升级为 quicklist</code></pre>
+
+<div class="callout tip">
+<p>面试总结数据结构演进时序：<br>
+Redis 3.0: ziplist + linkedlist<br>
+Redis 3.2: ziplist + <strong>quicklist</strong>（淘汰 linkedlist）<br>
+Redis 7.0: <strong>listpack</strong> + quicklist（淘汰 ziplist，消除连锁更新）<br>
+记住这条线，面试官追问"为什么要这样改"时就能接上。</p>
+</div>
+</div>
+
+</section>
+
+<!-- ==================== 第三章 ==================== -->
+<section id="ch3">
+<h2>三、持久化机制</h2>
+
+<div id="ch3-1">
+<h3>3.1 RDB 快照</h3>
+
+<p>RDB（Redis Database）是 Redis 数据在某个时间点的<strong>全量二进制快照</strong>。就像游戏的存档点——出事了可以从这里恢复。</p>
+
+<h4>触发方式</h4>
+<ul>
+  <li><code>SAVE</code>：阻塞主线程生成 RDB，生产环境<strong>禁用</strong></li>
+  <li><code>BGSAVE</code>：fork 子进程在后台生成，主线程继续服务</li>
+  <li>配置自动触发：<code>save 900 1</code>（900秒内有1次写入就触发）</li>
+  <li>主从全量同步时自动触发</li>
+</ul>
+
+<h4>fork + Copy-On-Write 机制（核心考点）</h4>
+
+<div class="diagram">
+<svg width="700" height="280" viewBox="0 0 700 280" xmlns="http://www.w3.org/2000/svg">
+  <!-- Timeline -->
+  <line x1="50" y1="140" x2="650" y2="140" stroke="#30363d" stroke-width="2"/>
+
+  <!-- fork point -->
+  <circle cx="150" cy="140" r="6" fill="#dc3545"/>
+  <text x="150" y="125" fill="#dc3545" font-size="11" text-anchor="middle" font-family="monospace">fork()</text>
+
+  <!-- Parent process -->
+  <rect x="50" y="40" width="600" height="45" rx="6" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-width="1"/>
+  <text x="70" y="67" fill="#3fb950" font-size="12" font-family="SF Pro Display, sans-serif" font-weight="bold">父进程 (继续处理命令)</text>
+  <text x="350" y="67" fill="#8b949e" font-size="10" font-family="monospace">正常读写 → 触发 COW → 修改的页面复制一份</text>
+
+  <!-- Child process -->
+  <rect x="150" y="180" width="450" height="45" rx="6" fill="rgba(220,53,69,0.1)" stroke="#dc3545" stroke-width="1"/>
+  <text x="170" y="207" fill="#dc3545" font-size="12" font-family="SF Pro Display, sans-serif" font-weight="bold">子进程 (生成RDB)</text>
+  <text x="420" y="207" fill="#8b949e" font-size="10" font-family="monospace">遍历内存 → 序列化 → 写入 dump.rdb</text>
+
+  <!-- Done point -->
+  <circle cx="600" cy="195" r="6" fill="#3fb950"/>
+  <text x="600" y="245" fill="#3fb950" font-size="10" text-anchor="middle" font-family="monospace">完成，信号通知父进程</text>
+
+  <!-- Memory pages illustration -->
+  <rect x="50" y="255" width="600" height="20" rx="3" fill="none" stroke="#30363d" stroke-width="1"/>
+  <rect x="50" y="255" width="100" height="20" rx="3" fill="rgba(220,53,69,0.2)" stroke="#dc3545" stroke-width="1"/>
+  <text x="100" y="269" fill="#dc3545" font-size="9" text-anchor="middle" font-family="monospace">COW copied</text>
+  <rect x="150" y="255" width="500" height="20" rx="3" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-width="1"/>
+  <text x="400" y="269" fill="#3fb950" font-size="9" text-anchor="middle" font-family="monospace">共享内存页 (大部分页面不会被修改)</text>
+</svg>
+<div class="diagram-caption">图：BGSAVE 流程 — fork 后父子进程共享内存页，写时才复制（COW）</div>
+</div>
+
+<div class="callout antirez">
+<p>为什么选择 fork + COW 而不是加锁快照？因为 Redis 是单线程模型，加锁意味着停止服务。fork 的妙处在于利用操作系统的 COW 机制——fork 瞬间（通常 &lt; 1ms），子进程获得了一份"冻结"的内存视图，而父进程可以继续修改数据。只有被修改的内存页才会被复制，大多数情况下额外内存开销远小于全量数据的大小。</p>
+</div>
+
+<div class="callout warn">
+<p>面试追问："fork 有什么风险？"<br>
+1. <strong>内存膨胀</strong>：如果 fork 期间写入量大，COW 会复制大量页面（每个被修改的 4KB 页面复制一份），极端情况内存翻倍。Linux 的 Transparent Huge Pages (THP) 会放大这个问题——2MB 大页即使只修改 1 字节也整页复制，建议生产环境关闭 THP<br>
+2. <strong>fork 本身的耗时</strong>：虽然不复制数据页，但需要复制整个页表（page table）。每 1GB 内存约有 ~256K 个页表项需要复制。实测数据量 25GB 时，fork 可能耗时 200~500ms（取决于 CPU 和内存控制器），期间主线程完全阻塞，无法处理任何命令<br>
+3. <strong>解决方案</strong>：控制 Redis 单实例内存（建议 ≤ 10GB）；避免在业务高峰期触发 BGSAVE/AOF重写；如果实例数据确实大，考虑用 Cluster 分片降低单实例数据量；关闭 THP（echo never > /sys/kernel/mm/transparent_hugepage/enabled）</p>
+</div>
+
+<h4>RDB 文件结构</h4>
+<pre data-lang="text"><code>+-------+----------+---------+-----+---------+-----+---------+---------+
+| REDIS | db_ver   | DB 0    | ... | DB n    | ... | AUX     | EOF+CRC |
+| 5B    | 4B       | selectdb|     | selectdb|     | metadata| 9B      |
+|       |          | +entries|     | +entries|     |         |         |
++-------+----------+---------+-----+---------+-----+---------+---------+
+                   ↑ 每个DB包含key-value对，按类型编码序列化</code></pre>
+</div>
+
+<div id="ch3-2">
+<h3>3.2 AOF 日志</h3>
+
+<p>AOF（Append Only File）记录每条<strong>写命令</strong>，本质是 write-ahead log 的变种。恢复时逐条重放即可还原数据。</p>
+
+<h4>AOF 工作流程</h4>
+
+<p>命令执行顺序（与 MySQL redo log 不同！）：</p>
+<ol>
+  <li>Redis 先执行命令，修改内存数据</li>
+  <li>然后才将命令追加到 AOF 缓冲区</li>
+  <li>根据 fsync 策略刷盘</li>
+</ol>
+
+<div class="callout antirez">
+<p>为什么是"先执行后写日志"而不是 WAL？两个原因：<br>
+1. Redis 是内存数据库，数据本身在内存中是可用的，不需要日志来保证当前读的一致性；<br>
+2. 先执行能确保写入 AOF 的命令是<strong>语法正确且执行成功</strong>的，避免日志中混入垃圾命令。</p>
+</div>
+
+<h4>三种 fsync 策略</h4>
+
+<table>
+  <thead>
+    <tr>
+      <th>策略</th>
+      <th>配置</th>
+      <th>刷盘时机</th>
+      <th>性能</th>
+      <th>数据安全</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>always</strong></td>
+      <td><code>appendfsync always</code></td>
+      <td>每条命令后 fsync</td>
+      <td>最差（磁盘IO瓶颈）</td>
+      <td>最好（最多丢1条命令）</td>
+    </tr>
+    <tr>
+      <td><strong>everysec</strong></td>
+      <td><code>appendfsync everysec</code></td>
+      <td>每秒 fsync 一次</td>
+      <td><strong>折中（推荐）</strong></td>
+      <td>最多丢1秒数据</td>
+    </tr>
+    <tr>
+      <td><strong>no</strong></td>
+      <td><code>appendfsync no</code></td>
+      <td>交给OS决定（通常30s）</td>
+      <td>最好</td>
+      <td>最差（可能丢30s+）</td>
+    </tr>
+  </tbody>
+</table>
+
+<h4>AOF 重写（Rewrite）</h4>
+
+<p>AOF 文件会不断膨胀（同一个 key 的多次修改都保留）。重写机制将历史命令<strong>压缩为最终状态的最小命令集</strong>：</p>
+
+<pre data-lang="text"><code># 重写前 AOF：
+SET name "tom"
+SET name "jerry"
+SET name "spike"
+INCR counter
+INCR counter
+INCR counter
+
+# 重写后 AOF：
+SET name "spike"
+SET counter "3"</code></pre>
+
+<p>重写同样使用 <strong>fork 子进程</strong>（注意：不是主线程执行，与 RDB 的 BGSAVE 原理一致），期间父进程的新写入同时追加到旧 AOF 和<strong>重写缓冲区</strong>（aof_rewrite_buf），子进程完成后将缓冲区内容追加到新 AOF，最后原子替换。</p>
+
+<div class="callout tip">
+<p><strong>Redis 7.0 Multi-part AOF</strong>：7.0 之前 AOF 重写期间需要同时写旧 AOF 和重写缓冲区（双写），内存开销大且实现复杂。7.0 引入了 Multi-part AOF（MP-AOF），将 AOF 拆分为 base 文件（重写结果）+ 多个 incr 增量文件 + manifest 清单文件。重写时只需生成新的 base 文件，期间的增量命令写入新的 incr 文件，避免了重写缓冲区的内存开销和管道通信，整体更简洁高效。</p>
+</div>
+</div>
+
+<div id="ch3-3">
+<h3>3.3 混合持久化（Redis 4.0+）</h3>
+
+<p>面试结论题："RDB 和 AOF 怎么选？"——答案是：<strong>都要，用混合持久化</strong>。</p>
+
+<pre data-lang="redis"><code># redis.conf 开启混合持久化
+aof-use-rdb-preamble yes</code></pre>
+
+<p>混合持久化的 AOF 文件结构：</p>
+
+<pre data-lang="text"><code>+---------------------------+---------------------------+
+|    RDB 格式（全量快照）    |    AOF 格式（增量命令）    |
+|    文件前半部分            |    文件后半部分            |
++---------------------------+---------------------------+
+↑ 重写时生成的RDB快照        ↑ 重写完成后的新增写命令</code></pre>
+
+<p>恢复时先加载 RDB 部分（快），再重放 AOF 增量命令（少），既保证了恢复速度，又降低了数据丢失的风险。</p>
+
+<h4>生产环境配置建议</h4>
+
+<pre data-lang="redis"><code># 推荐配置
+appendonly yes                   # 开启AOF
+appendfsync everysec             # 每秒刷盘
+aof-use-rdb-preamble yes         # 混合持久化
+auto-aof-rewrite-percentage 100  # AOF体积翻倍时触发重写
+auto-aof-rewrite-min-size 64mb   # AOF最小64MB才触发重写
+
+# 同时保留RDB快照（用于备份/主从同步）
+save 900 1
+save 300 10
+save 60 10000</code></pre>
+
+<table>
+  <thead>
+    <tr>
+      <th>维度</th>
+      <th>RDB</th>
+      <th>AOF</th>
+      <th>混合持久化</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>恢复速度</td>
+      <td><strong>快</strong>（二进制加载）</td>
+      <td>慢（逐条重放）</td>
+      <td><strong>快</strong></td>
+    </tr>
+    <tr>
+      <td>数据完整性</td>
+      <td>差（可能丢分钟级）</td>
+      <td><strong>好</strong>（最多丢1秒）</td>
+      <td><strong>好</strong></td>
+    </tr>
+    <tr>
+      <td>文件体积</td>
+      <td><strong>小</strong>（压缩）</td>
+      <td>大（文本命令）</td>
+      <td>中等</td>
+    </tr>
+    <tr>
+      <td>fork开销</td>
+      <td>有</td>
+      <td>重写时有</td>
+      <td>重写时有</td>
+    </tr>
+    <tr>
+      <td>适用场景</td>
+      <td>备份、灾恢</td>
+      <td>数据安全优先</td>
+      <td><strong>生产首选</strong></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout tip">
+<p>面试加分回答："我们线上用混合持久化，AOF everysec。同时每天凌晨做一次 BGSAVE 用于异地备份到 OSS/S3。恢复优先用 AOF（数据更完整），BGSAVE 作为灾难恢复的最后兜底。"</p>
+</div>
+</div>
+
+</section>
+
+<!-- ==================== 第四章 ==================== -->
+<section id="ch4">
+<h2>四、内存管理与淘汰策略</h2>
+
+<div id="ch4-1">
+<h3>4.1 过期删除策略</h3>
+
+<p>Redis 中设置了 TTL 的 key，到期后怎么删？不是到点就删——那样需要一个定时器对每个 key，开销太大。Redis 用了两种策略配合：</p>
+
+<h4>惰性删除（Lazy Expiration）</h4>
+<p>访问一个 key 时，先检查是否过期。过期了就删除并返回 nil。<strong>优点</strong>：对 CPU 友好，不主动消耗算力。<strong>缺点</strong>：如果大量 key 过期但没有被访问，就会一直占着内存（内存泄漏）。</p>
+
+<h4>定期删除（Active Expiration）</h4>
+<p>Redis 每 100ms（每秒 10 次 serverCron）执行一轮主动清理：</p>
+
+<div class="diagram">
+<svg width="550" height="260" viewBox="0 0 550 260" xmlns="http://www.w3.org/2000/svg">
+  <!-- Flowchart -->
+  <rect x="180" y="10" width="200" height="35" rx="6" fill="#1c2128" stroke="#d29922" stroke-width="1.5"/>
+  <text x="280" y="32" fill="#d29922" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif">从过期字典随机取 20 个 key</text>
+
+  <line x1="280" y1="45" x2="280" y2="65" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrG2)"/>
+
+  <rect x="180" y="65" width="200" height="35" rx="6" fill="#1c2128" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="280" y="87" fill="#3fb950" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif">删除其中已过期的 key</text>
+
+  <line x1="280" y1="100" x2="280" y2="120" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrG2)"/>
+
+  <!-- Decision diamond -->
+  <polygon points="280,120 380,155 280,190 180,155" fill="#1c2128" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="280" y="152" fill="#dc3545" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">过期比例 > 25%?</text>
+
+  <!-- Yes path -->
+  <line x1="280" y1="190" x2="280" y2="210" stroke="#dc3545" stroke-width="1.5" marker-end="url(#arrR2)"/>
+  <text x="295" y="205" fill="#dc3545" font-size="9" font-family="monospace">YES</text>
+  <rect x="200" y="210" width="160" height="30" rx="6" fill="rgba(220,53,69,0.15)" stroke="#dc3545" stroke-width="1"/>
+  <text x="280" y="229" fill="#dc3545" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">继续循环（回到步骤1）</text>
+
+  <!-- No path -->
+  <line x1="380" y1="155" x2="450" y2="155" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrGn2)"/>
+  <text x="405" y="147" fill="#3fb950" font-size="9" font-family="monospace">NO</text>
+  <rect x="450" y="140" width="90" height="30" rx="6" fill="rgba(63,185,80,0.15)" stroke="#3fb950" stroke-width="1"/>
+  <text x="495" y="159" fill="#3fb950" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">本轮结束</text>
+
+  <defs>
+    <marker id="arrG2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#8b949e"/></marker>
+    <marker id="arrR2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#dc3545"/></marker>
+    <marker id="arrGn2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3fb950"/></marker>
+  </defs>
+</svg>
+<div class="diagram-caption">图：定期删除算法流程 — 随机采样 + 比例控制，避免一次性扫太多阻塞主线程</div>
+</div>
+
+<div class="callout antirez">
+<p>定期删除的"25% 阈值"设计是一个自适应机制：如果过期 key 很多（> 25%），说明有大量 key 刚刚到期，值得花更多 CPU 去清理；如果很少，就赶紧收手，别影响正常命令处理。这是典型的"做够了就停"（adaptive work）模式。</p>
+</div>
+</div>
+
+<div id="ch4-2">
+<h3>4.2 八种内存淘汰策略</h3>
+
+<p>当 Redis 内存达到 <code>maxmemory</code> 限制时，新写入命令会触发淘汰。Redis 提供 8 种策略（Redis 4.0+ 新增 LFU 相关）：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>策略</th>
+      <th>作用范围</th>
+      <th>算法</th>
+      <th>适用场景</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>noeviction</code></td>
+      <td>—</td>
+      <td>不淘汰，写入返回错误</td>
+      <td>不允许丢数据的场景</td>
+    </tr>
+    <tr>
+      <td><code>allkeys-lru</code></td>
+      <td>所有key</td>
+      <td>近似LRU</td>
+      <td><strong>最常用，通用缓存</strong></td>
+    </tr>
+    <tr>
+      <td><code>allkeys-lfu</code></td>
+      <td>所有key</td>
+      <td>近似LFU</td>
+      <td>有明显冷热分布</td>
+    </tr>
+    <tr>
+      <td><code>allkeys-random</code></td>
+      <td>所有key</td>
+      <td>随机淘汰</td>
+      <td>无明显热点</td>
+    </tr>
+    <tr>
+      <td><code>volatile-lru</code></td>
+      <td>设了TTL的key</td>
+      <td>近似LRU</td>
+      <td>混合持久key+缓存key</td>
+    </tr>
+    <tr>
+      <td><code>volatile-lfu</code></td>
+      <td>设了TTL的key</td>
+      <td>近似LFU</td>
+      <td>同上，热点更稳定</td>
+    </tr>
+    <tr>
+      <td><code>volatile-random</code></td>
+      <td>设了TTL的key</td>
+      <td>随机淘汰</td>
+      <td>不关心淘汰顺序</td>
+    </tr>
+    <tr>
+      <td><code>volatile-ttl</code></td>
+      <td>设了TTL的key</td>
+      <td>淘汰最快过期的</td>
+      <td>TTL有明确业务含义</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout tip">
+<p><strong>面试选择题标准答案</strong>：<br>
+- 纯缓存场景 → <code>allkeys-lru</code>（最安全的通用选择）<br>
+- 有明显冷热分布（如电商商品） → <code>allkeys-lfu</code><br>
+- 既有缓存 key 又有持久 key（如分布式锁） → <code>volatile-lru</code>（只淘汰缓存key，不动锁key）</p>
+</div>
+</div>
+
+<div id="ch4-3">
+<h3>4.3 近似 LRU vs LFU 实现原理</h3>
+
+<h4>为什么是"近似"LRU？</h4>
+
+<p>精确 LRU 需要维护一个全局双向链表（像 LinkedHashMap），每次访问都移动节点。对于 Redis 数百万 key 来说，这个开销不可接受——<strong>每个节点两个指针 = 16 字节/key</strong>，而且链表操作对 cache line 不友好。</p>
+
+<p>Redis 的做法是<strong>近似 LRU</strong>：在 redisObject 里用 24bit 记录最后访问时间戳（精度到秒），淘汰时随机采样 N 个 key（默认5个），踢掉其中最旧的。</p>
+
+<pre data-lang="c"><code>// redisObject 结构（Redis源码 server.h）
+typedef struct redisObject {
+    unsigned type:4;       // 数据类型
+    unsigned encoding:4;   // 编码方式
+    unsigned lru:LRU_BITS; // 24bit：LRU时间 或 LFU计数器
+    int refcount;          // 引用计数
+    void *ptr;             // 指向实际数据
+} robj;</code></pre>
+
+<div class="callout antirez">
+<p>有人问我为什么不用精确 LRU。答案很简单：当采样数设为 10 时，近似 LRU 的淘汰效果已经非常接近精确 LRU（可视化对比几乎重合），但省掉了每个 key 16 字节的指针开销和每次访问的链表操作。对于 1 亿个 key，这就是省 1.5GB 内存的区别。工程就是在"足够好"和"完美"之间选前者。</p>
+</div>
+
+<h4>LFU（Least Frequently Used）— Redis 4.0+</h4>
+
+<p>LFU 复用了 <code>lru</code> 字段的 24bit，拆成两部分：</p>
+
+<pre data-lang="text"><code>24 bits = 16 bits (ldt: last decrement time, 分钟精度) + 8 bits (counter: 对数计数器)
+
+counter 不是真实访问次数，而是对数计数：
+- 新key的counter初始值 = 5（LFU_INIT_VAL）
+- 每次访问：counter 以概率递增（概率 = 1/(counter * lfu_log_factor + 1)）
+  → counter越大，递增越难（对数增长），8bit最大255足以区分十万级访问量差异
+- 随时间衰减：每次访问key时检查 ldt 与当前时间差值
+  衰减量 = (now_minutes - ldt) / lfu_decay_time
+  → 例如 lfu_decay_time=1 时，每过1分钟 counter 减1
+  → 这保证了长时间未访问的"历史热点"会逐渐降温
+
+这样 8bit（最大255）就能表示巨大的访问频率范围</code></pre>
+
+<p><strong>LFU 解决了 LRU 的什么问题？</strong></p>
+<p>LRU 的经典缺陷：一次全表扫描（如运维的 <code>KEYS *</code>）会把所有 key 的访问时间刷新，导致真正的热数据被误淘汰。LFU 基于频率而非时间，短暂的批量访问不会显著改变冷数据的 counter。</p>
+
+<pre data-lang="redis"><code># 配置 LFU 参数
+maxmemory-policy allkeys-lfu
+lfu-log-factor 10    # 计数器增长速度（越大增长越慢，区分度越高）
+lfu-decay-time 1     # 每过1分钟，counter衰减1
+
+# 查看 key 的访问频率
+127.0.0.1:6379&gt; OBJECT FREQ mykey
+(integer) 42</code></pre>
+</div>
+
+</section>
+
+<!-- ==================== 第五章 ==================== -->
+<section id="ch5">
+<h2>五、高可用架构</h2>
+
+<div id="ch5-1">
+<h3>5.1 主从复制</h3>
+
+<p>单机 Redis 的最大风险：<strong>单点故障</strong>。主从复制是所有高可用方案的基石——通过数据冗余解决可用性问题。</p>
+
+<h4>全量同步 + 增量同步流程</h4>
+
+<div class="diagram">
+<svg width="680" height="350" viewBox="0 0 680 350" xmlns="http://www.w3.org/2000/svg">
+  <!-- Master & Slave boxes -->
+  <rect x="80" y="20" width="120" height="40" rx="6" fill="#1c2128" stroke="#dc3545" stroke-width="2"/>
+  <text x="140" y="45" fill="#dc3545" font-size="13" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">Master</text>
+
+  <rect x="480" y="20" width="120" height="40" rx="6" fill="#1c2128" stroke="#58a6ff" stroke-width="2"/>
+  <text x="540" y="45" fill="#58a6ff" font-size="13" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">Slave</text>
+
+  <!-- Step 1 -->
+  <line x1="480" y1="80" x2="200" y2="80" stroke="#d29922" stroke-width="1.5" marker-end="url(#arrY2)"/>
+  <text x="340" y="75" fill="#d29922" font-size="10" text-anchor="middle" font-family="monospace">① PSYNC ? -1 (首次请求全量)</text>
+
+  <!-- Step 2 -->
+  <line x1="200" y1="110" x2="480" y2="110" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrGn3)"/>
+  <text x="340" y="105" fill="#3fb950" font-size="10" text-anchor="middle" font-family="monospace">② +FULLRESYNC {replid} {offset}</text>
+
+  <!-- Step 3: BGSAVE -->
+  <rect x="95" y="125" width="90" height="25" rx="4" fill="rgba(220,53,69,0.15)" stroke="#dc3545" stroke-width="1"/>
+  <text x="140" y="142" fill="#dc3545" font-size="9" text-anchor="middle" font-family="monospace">BGSAVE生成RDB</text>
+
+  <!-- Step 4: Send RDB -->
+  <line x1="200" y1="165" x2="480" y2="165" stroke="#dc3545" stroke-width="2" marker-end="url(#arrR3)"/>
+  <text x="340" y="160" fill="#dc3545" font-size="10" text-anchor="middle" font-family="monospace">③ 发送RDB文件（全量数据）</text>
+
+  <!-- Step 5: Buffer -->
+  <rect x="95" y="175" width="90" height="25" rx="4" fill="rgba(210,153,34,0.15)" stroke="#d29922" stroke-width="1"/>
+  <text x="140" y="192" fill="#d29922" font-size="8" text-anchor="middle" font-family="monospace">repl_backlog缓冲</text>
+
+  <!-- Step 6: Send buffer -->
+  <line x1="200" y1="210" x2="480" y2="210" stroke="#d29922" stroke-width="1.5" marker-end="url(#arrY2)"/>
+  <text x="340" y="205" fill="#d29922" font-size="10" text-anchor="middle" font-family="monospace">④ 发送缓冲区积压的写命令</text>
+
+  <!-- Divider -->
+  <line x1="50" y1="240" x2="650" y2="240" stroke="#30363d" stroke-width="1" stroke-dasharray="6"/>
+  <text x="340" y="255" fill="#6e7681" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">—— 全量同步完成，进入增量同步阶段 ——</text>
+
+  <!-- Incremental sync -->
+  <line x1="200" y1="280" x2="480" y2="280" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrGn3)"/>
+  <text x="340" y="275" fill="#3fb950" font-size="10" text-anchor="middle" font-family="monospace">⑤ 持续传播写命令（增量同步）</text>
+
+  <!-- Reconnect case -->
+  <line x1="480" y1="310" x2="200" y2="310" stroke="#a371f7" stroke-width="1.5" marker-end="url(#arrP2)"/>
+  <text x="340" y="305" fill="#a371f7" font-size="10" text-anchor="middle" font-family="monospace">断线重连: PSYNC {replid} {offset}</text>
+
+  <text x="340" y="340" fill="#8b949e" font-size="9" text-anchor="middle" font-family="SF Pro Display, sans-serif">如果 offset 在 repl_backlog 范围内 → 部分重同步；否则 → 全量重同步</text>
+
+  <defs>
+    <marker id="arrY2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#d29922"/></marker>
+    <marker id="arrGn3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3fb950"/></marker>
+    <marker id="arrR3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#dc3545"/></marker>
+    <marker id="arrP2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#a371f7"/></marker>
+  </defs>
+</svg>
+<div class="diagram-caption">图：Redis 主从复制流程 — PSYNC 2.0 支持全量和部分重同步</div>
+</div>
+
+<h4>关键概念</h4>
+<ul>
+  <li><strong>repl_backlog</strong>：环形缓冲区（默认 1MB），存储最近的写命令。slave 断线重连时，如果断线期间的数据还在 backlog 中，就只做增量同步</li>
+  <li><strong>replication ID</strong>：每个 master 有唯一的 replid。slave 保存 replid + offset，重连时发给新 master 判断是否能增量同步</li>
+  <li><strong>异步复制</strong>：master 不等 slave 确认就返回客户端，所以<strong>主从之间是最终一致性</strong>，不是强一致</li>
+</ul>
+
+<div class="callout warn">
+<p>面试陷阱题："主从复制能保证数据不丢吗？"<br>
+答案是<strong>不能</strong>。因为复制是异步的：master 宕机时，已确认给客户端但还没传给 slave 的数据会丢失。要降低丢失风险，可以配置 <code>min-replicas-to-write 1</code> + <code>min-replicas-max-lag 10</code>，但这只是降低概率，不是消除。</p>
+</div>
+</div>
+
+<div id="ch5-2">
+<h3>5.2 Sentinel 哨兵</h3>
+
+<p>主从复制解决了数据冗余，但 master 宕机后需要<strong>手动切换</strong>。Sentinel 就是自动化的故障检测 + 故障转移方案。</p>
+
+<h4>Sentinel 架构</h4>
+
+<div class="diagram">
+<svg width="600" height="280" viewBox="0 0 600 280" xmlns="http://www.w3.org/2000/svg">
+  <!-- Sentinel nodes -->
+  <circle cx="200" cy="50" r="25" fill="#1c2128" stroke="#d29922" stroke-width="2"/>
+  <text x="200" y="55" fill="#d29922" font-size="10" text-anchor="middle" font-family="monospace">S1</text>
+
+  <circle cx="300" cy="50" r="25" fill="#1c2128" stroke="#d29922" stroke-width="2"/>
+  <text x="300" y="55" fill="#d29922" font-size="10" text-anchor="middle" font-family="monospace">S2</text>
+
+  <circle cx="400" cy="50" r="25" fill="#1c2128" stroke="#d29922" stroke-width="2"/>
+  <text x="400" y="55" fill="#d29922" font-size="10" text-anchor="middle" font-family="monospace">S3</text>
+
+  <!-- Sentinel connections -->
+  <line x1="225" y1="50" x2="275" y2="50" stroke="#d29922" stroke-width="1" stroke-dasharray="4"/>
+  <line x1="325" y1="50" x2="375" y2="50" stroke="#d29922" stroke-width="1" stroke-dasharray="4"/>
+  <line x1="215" y1="70" x2="385" y2="70" stroke="#d29922" stroke-width="1" stroke-dasharray="4"/>
+
+  <text x="300" y="15" fill="#d29922" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">Sentinel 集群（≥3个，奇数）</text>
+
+  <!-- Master -->
+  <rect x="240" y="140" width="120" height="45" rx="6" fill="#1c2128" stroke="#dc3545" stroke-width="2"/>
+  <text x="300" y="167" fill="#dc3545" font-size="12" text-anchor="middle" font-family="monospace" font-weight="bold">Master</text>
+
+  <!-- Monitoring arrows -->
+  <line x1="200" y1="75" x2="260" y2="140" stroke="#8b949e" stroke-width="1" stroke-dasharray="3"/>
+  <line x1="300" y1="75" x2="300" y2="140" stroke="#8b949e" stroke-width="1" stroke-dasharray="3"/>
+  <line x1="400" y1="75" x2="340" y2="140" stroke="#8b949e" stroke-width="1" stroke-dasharray="3"/>
+
+  <!-- Slaves -->
+  <rect x="80" y="230" width="100" height="35" rx="6" fill="#1c2128" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="130" y="252" fill="#58a6ff" font-size="11" text-anchor="middle" font-family="monospace">Slave 1</text>
+
+  <rect x="250" y="230" width="100" height="35" rx="6" fill="#1c2128" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="300" y="252" fill="#58a6ff" font-size="11" text-anchor="middle" font-family="monospace">Slave 2</text>
+
+  <rect x="420" y="230" width="100" height="35" rx="6" fill="#1c2128" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="470" y="252" fill="#58a6ff" font-size="11" text-anchor="middle" font-family="monospace">Slave 3</text>
+
+  <!-- Master to slaves -->
+  <line x1="270" y1="185" x2="145" y2="230" stroke="#8b949e" stroke-width="1.5"/>
+  <line x1="300" y1="185" x2="300" y2="230" stroke="#8b949e" stroke-width="1.5"/>
+  <line x1="330" y1="185" x2="455" y2="230" stroke="#8b949e" stroke-width="1.5"/>
+</svg>
+<div class="diagram-caption">图：Sentinel 架构 — 多个哨兵监控 master，达成共识后自动故障转移</div>
+</div>
+
+<h4>故障转移流程</h4>
+<ol>
+  <li><strong>主观下线 (SDOWN)</strong>：单个 Sentinel 在 <code>down-after-milliseconds</code> 时间内无法 ping 通 master</li>
+  <li><strong>客观下线 (ODOWN)</strong>：Sentinel 向其他 Sentinel 询问，超过 <code>quorum</code> 个确认后，判定 master 客观下线</li>
+  <li><strong>Leader 选举</strong>：Sentinel 之间用类 Raft 的投票机制（epoch 递增 + 每轮只投一票 + 多数派授权）选出一个 leader 执行故障转移。注意这不是完整的 Raft 共识协议（无日志复制），仅借用了其 leader election 思想，因此在网络分区期间仍可能短暂出现双 master</li>
+  <li><strong>选择新 master</strong>：按优先级（replica-priority）、复制偏移量（数据最新）、runID 排序选出最优 slave</li>
+  <li><strong>执行切换</strong>：对选中 slave 执行 <code>SLAVEOF NO ONE</code>，让其他 slave 指向新 master，通知客户端</li>
+</ol>
+
+<pre data-lang="redis"><code># sentinel.conf 关键配置
+sentinel monitor mymaster 192.168.1.100 6379 2   # quorum=2
+sentinel down-after-milliseconds mymaster 5000    # 5s无响应判SDOWN
+sentinel failover-timeout mymaster 60000          # 故障转移超时60s
+sentinel parallel-syncs mymaster 1                # 同时同步的slave数</code></pre>
+
+<div class="callout tip">
+<p>面试答 Sentinel 的关键点：<br>
+1. Sentinel 本身也要高可用 → 至少部署 <strong>3 个</strong>（奇数个），部署在不同机器。为什么至少3个？因为 Leader 选举需要获得<strong>多数派（majority）</strong>同意——2个 Sentinel 时 majority=2，任何一个挂了就无法选举；3个时 majority=2，挂掉1个仍能正常工作<br>
+2. quorum 决定客观下线的判定（可以设得比 majority 小），majority 决定能否执行故障转移。例如5个 Sentinel 设 quorum=2：2个同意就判定 ODOWN，但执行 failover 仍需3个（majority）参与选举<br>
+3. 客户端通过 Sentinel 获取当前 master 地址，不是硬编码 IP<br>
+4. Sentinel 之间通过 Redis master 的 <code>__sentinel__:hello</code> 频道自动发现彼此，无需手动配置所有 Sentinel 地址</p>
+</div>
+</div>
+
+<div id="ch5-3">
+<h3>5.3 Redis Cluster 集群</h3>
+
+<p>Sentinel 解决了高可用但没解决<strong>容量瓶颈</strong>——单机内存有限。Cluster 通过<strong>数据分片</strong>实现水平扩展。</p>
+
+<h4>核心设计：16384 个哈希槽</h4>
+
+<p>Redis Cluster 将 key 空间划分为 <strong>16384 个 slot</strong>，每个节点负责一部分 slot。key 的归属通过 <code>CRC16(key) % 16384</code> 计算（使用 CRC-CCITT 变体，多项式为 x^16+x^12+x^5+1）。如果 key 中包含 <code>{...}</code> 花括号，则只对花括号内的部分计算哈希（hash tag 机制），用于将相关 key 路由到同一 slot 以支持跨 key 操作。</p>
+
+<div class="diagram">
+<svg width="650" height="200" viewBox="0 0 650 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Slot bar -->
+  <rect x="50" y="30" width="550" height="40" rx="6" fill="#1c2128" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Node A slots -->
+  <rect x="50" y="30" width="183" height="40" rx="6" fill="rgba(220,53,69,0.2)" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="141" y="55" fill="#dc3545" font-size="11" text-anchor="middle" font-family="monospace">Node A: 0~5460</text>
+
+  <!-- Node B slots -->
+  <rect x="233" y="30" width="184" height="40" rx="6" fill="rgba(63,185,80,0.2)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="325" y="55" fill="#3fb950" font-size="11" text-anchor="middle" font-family="monospace">Node B: 5461~10922</text>
+
+  <!-- Node C slots -->
+  <rect x="417" y="30" width="183" height="40" rx="6" fill="rgba(88,166,255,0.2)" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="508" y="55" fill="#58a6ff" font-size="11" text-anchor="middle" font-family="monospace">Node C: 10923~16383</text>
+
+  <!-- Nodes with replicas -->
+  <rect x="80" y="110" width="90" height="35" rx="4" fill="#1c2128" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="125" y="132" fill="#dc3545" font-size="10" text-anchor="middle" font-family="monospace">Master A</text>
+  <rect x="80" y="155" width="90" height="30" rx="4" fill="#1c2128" stroke="#dc3545" stroke-width="1" stroke-dasharray="3"/>
+  <text x="125" y="174" fill="#8b949e" font-size="9" text-anchor="middle" font-family="monospace">Slave A1</text>
+
+  <rect x="270" y="110" width="90" height="35" rx="4" fill="#1c2128" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="315" y="132" fill="#3fb950" font-size="10" text-anchor="middle" font-family="monospace">Master B</text>
+  <rect x="270" y="155" width="90" height="30" rx="4" fill="#1c2128" stroke="#3fb950" stroke-width="1" stroke-dasharray="3"/>
+  <text x="315" y="174" fill="#8b949e" font-size="9" text-anchor="middle" font-family="monospace">Slave B1</text>
+
+  <rect x="460" y="110" width="90" height="35" rx="4" fill="#1c2128" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="505" y="132" fill="#58a6ff" font-size="10" text-anchor="middle" font-family="monospace">Master C</text>
+  <rect x="460" y="155" width="90" height="30" rx="4" fill="#1c2128" stroke="#58a6ff" stroke-width="1" stroke-dasharray="3"/>
+  <text x="505" y="174" fill="#8b949e" font-size="9" text-anchor="middle" font-family="monospace">Slave C1</text>
+
+  <!-- Arrows from slot bar to nodes -->
+  <line x1="141" y1="70" x2="125" y2="110" stroke="#dc3545" stroke-width="1"/>
+  <line x1="325" y1="70" x2="315" y2="110" stroke="#3fb950" stroke-width="1"/>
+  <line x1="508" y1="70" x2="505" y2="110" stroke="#58a6ff" stroke-width="1"/>
+
+  <text x="325" y="12" fill="#8b949e" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">16384 个 Slot 均匀分布在各 Master 节点</text>
+</svg>
+<div class="diagram-caption">图：Redis Cluster 分片 — 每个 master 负责部分 slot，各带 slave 做高可用</div>
+</div>
+
+<div class="callout antirez">
+<p>为什么是 16384 而不是更多（如 65536）？我在设计时考虑了三个因素：</p>
+<p>1. <strong>Gossip 协议的带宽</strong>：每个节点在心跳包（PING/PONG）中要携带自己负责的 slot 信息作为 bitmap。16384 个 slot = 2KB 的 bitmap，每次心跳包大小可控；如果用 65536 slot，光 bitmap 就要 8KB，在百节点集群中每秒数十次心跳的带宽就是问题。</p>
+<p>2. <strong>集群规模</strong>：Redis 官方建议集群最多 1000 个 master 节点。16384 / 1000 ≈ 16 slot/node，每个节点至少管理十几个 slot，粒度已经足够细，能做到相当均匀的数据分布。</p>
+<p>3. <strong>slot 压缩传输</strong>：16384 在用 bitmap 压缩时刚好合适——节点数少时大部分 bit 为0，可以高效压缩；用 65536 则浪费空间且压缩收益不大。</p>
+</div>
+
+<h4>MOVED 与 ASK 重定向</h4>
+
+<pre data-lang="redis"><code># 客户端请求了错误的节点
+127.0.0.1:7000&gt; GET user:1000
+(error) MOVED 5798 192.168.1.102:7001
+# 含义：key hash到slot 5798，永久归属于 7001 节点，客户端应更新slot映射表
+
+# 正在迁移中的slot
+127.0.0.1:7000&gt; GET user:2000
+(error) ASK 8901 192.168.1.103:7002
+# 含义：slot 8901 正在迁移到 7002，本次请求去那边问，但别更新映射表</code></pre>
+
+<h4>Gossip 协议</h4>
+<p>Cluster 节点之间通过 Gossip 协议交换状态信息，去中心化，无需额外的协调节点。每个节点每秒会随机选择几个节点发送 PING 消息，消息体包含：</p>
+<ul>
+  <li><strong>发送者的 slot bitmap</strong>（16384 bit = 2KB）— 声明自己负责哪些 slot</li>
+  <li><strong>部分已知节点的状态</strong>（随机选取）— 传播集群拓扑信息</li>
+  <li><strong>消息类型</strong>：PING/PONG（心跳）、MEET（加入集群）、FAIL（标记节点故障）</li>
+</ul>
+<p>Gossip 的代价是状态收敛不是瞬时的——一个节点宕机的消息传播到全集群需要 O(log N) 轮通信周期（通常几秒）。节点故障检测的流程：节点 A 发现节点 B 超时未回复 PING → A 标记 B 为 PFAIL（疑似故障）→ A 通过 Gossip 传播 PFAIL 信息 → 当超过半数 master 节点都标记 B 为 PFAIL 时，B 被标记为 FAIL（确认故障）→ 触发从节点提升。</p>
+</div>
+
+<div id="ch5-4">
+<h3>5.4 脑裂问题</h3>
+
+<p><strong>脑裂</strong>：网络分区导致 master 和 slave 之间断连，Sentinel/Cluster 将 slave 提升为新 master，但旧 master 还在运行并接收写入。当网络恢复后，旧 master 变为 slave 被全量同步覆盖——<strong>分区期间的写入全部丢失</strong>。</p>
+
+<h4>解决方案</h4>
+
+<pre data-lang="redis"><code># redis.conf — 脑裂保护配置
+min-replicas-to-write 1     # master 至少要有1个 slave 在正常同步
+min-replicas-max-lag 10     # slave 的ACK延迟不超过10秒
+
+# 效果：如果 master 发现自己联系不到任何 slave 超过10秒
+#       就拒绝写入 → 客户端收到错误 → 避免脑裂期间数据丢失</code></pre>
+
+<div class="callout antirez">
+<p>脑裂的根源是我们选择了 AP（可用性 + 分区容忍）而非 CP（一致性 + 分区容忍）。Redis 的设计目标是高可用、低延迟，所以复制是异步的。<code>min-replicas-to-write</code> 是一种折中：在可用性和一致性之间加了一道"最低保障线"。它不能完全消除数据丢失，但把丢失窗口从"整个脑裂期间"缩小到"最后10秒"。</p>
+</div>
+
+<div class="callout tip">
+<p>面试标准答案模板：<br>
+1. 先解释脑裂的成因（网络分区 + 异步复制）<br>
+2. 再说解决方案（min-replicas-to-write/max-lag）<br>
+3. 最后加一句："Redis 本身是 AP 系统，如果业务需要强一致，应该用 ZooKeeper/etcd 做分布式协调，Redis 做缓存层"</p>
+</div>
+</div>
+
+</section>
+
+<!-- ==================== 第六章 ==================== -->
+<section id="ch6">
+<h2>六、缓存一致性与经典问题</h2>
+
+<div id="ch6-1">
+<h3>6.1 缓存穿透 / 击穿 / 雪崩</h3>
+
+<p>这三个是面试"送分题"，但很多人混淆。用一句话区分：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>问题</th>
+      <th>本质</th>
+      <th>一句话描述</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>穿透</strong></td>
+      <td>查询不存在的数据</td>
+      <td>缓存和DB都没有，每次请求都打到DB</td>
+    </tr>
+    <tr>
+      <td><strong>击穿</strong></td>
+      <td>热点key失效瞬间</td>
+      <td>缓存有但刚过期，大量并发同时回源DB</td>
+    </tr>
+    <tr>
+      <td><strong>雪崩</strong></td>
+      <td>大量key同时失效</td>
+      <td>缓存层整体失效，流量全部涌向DB</td>
+    </tr>
+  </tbody>
+</table>
+
+<h4>缓存穿透解决方案</h4>
+
+<pre data-lang="java"><code>// 方案1：缓存空值
+public User getUser(Long userId) {
+    String key = "user:" + userId;
+    String cached = redis.get(key);
+
+    if (cached != null) {
+        return "NULL".equals(cached) ? null : JSON.parseObject(cached, User.class);
+    }
+
+    User user = userMapper.selectById(userId);
+    if (user == null) {
+        // 缓存空值，设短过期时间防止长期占内存
+        redis.setex(key, 300, "NULL");  // 5分钟
+        return null;
+    }
+
+    redis.setex(key, 3600, JSON.toJSONString(user));
+    return user;
+}
+
+// 方案2：布隆过滤器（适合数据集固定或可接受少量误判的场景）
+@PostConstruct
+public void initBloomFilter() {
+    // Guava BloomFilter 或 Redis 的 BF.ADD
+    bloomFilter = BloomFilter.create(Funnels.longFunnel(), 1_000_000, 0.01);
+    // 初始化时加载所有存在的用户ID
+    userMapper.selectAllIds().forEach(bloomFilter::put);
+}
+
+public User getUserWithBloom(Long userId) {
+    // 布隆过滤器判断：说不存在就一定不存在
+    if (!bloomFilter.mightContain(userId)) {
+        return null;  // 直接拦截，不查DB
+    }
+    // ... 正常缓存逻辑
+}</code></pre>
+
+<h4>缓存击穿解决方案</h4>
+
+<pre data-lang="java"><code>// 方案1：互斥锁（singleflight 思想）
+public User getHotUser(Long userId) {
+    String key = "user:" + userId;
+    String cached = redis.get(key);
+    if (cached != null) return JSON.parseObject(cached, User.class);
+
+    // 获取分布式锁，只让一个线程回源
+    String lockKey = "lock:" + key;
+    if (redis.set(lockKey, "1", "NX", "EX", 10)) {
+        try {
+            // 双重检查
+            cached = redis.get(key);
+            if (cached != null) return JSON.parseObject(cached, User.class);
+
+            User user = userMapper.selectById(userId);
+            redis.setex(key, 3600, JSON.toJSONString(user));
+            return user;
+        } finally {
+            redis.del(lockKey);
+        }
+    } else {
+        // 没拿到锁的线程等待后重试
+        Thread.sleep(50);
+        return getHotUser(userId);  // 递归重试
+    }
+}
+
+// 方案2：逻辑过期（不设TTL，由业务判断过期）
+public User getHotUserLogicalExpire(Long userId) {
+    String key = "user:" + userId;
+    String cached = redis.get(key);  // 永不过期的key
+    CacheWrapper wrapper = JSON.parseObject(cached, CacheWrapper.class);
+
+    if (wrapper.getExpireTime() > System.currentTimeMillis()) {
+        return wrapper.getData();  // 未逻辑过期，直接返回
+    }
+
+    // 已逻辑过期 → 异步刷新，当前请求返回旧数据
+    if (redis.set("lock:" + key, "1", "NX", "EX", 10)) {
+        executorService.submit(() -> {
+            User user = userMapper.selectById(userId);
+            CacheWrapper newWrapper = new CacheWrapper(user, now() + 3600_000);
+            redis.set(key, JSON.toJSONString(newWrapper));
+            redis.del("lock:" + key);
+        });
+    }
+    return wrapper.getData();  // 返回旧数据，保证可用性
+}</code></pre>
+
+<h4>缓存雪崩解决方案</h4>
+<ul>
+  <li><strong>过期时间加随机值</strong>：<code>expire = baseTime + random(0, 300)</code>，避免同一批 key 同时过期</li>
+  <li><strong>多级缓存</strong>：L1（Caffeine）+ L2（Redis），即使 Redis 大面积失效，L1 还能扛一波</li>
+  <li><strong>熔断降级</strong>：检测到 DB 压力过大时，直接返回默认值或错误，保护数据库不被打死</li>
+  <li><strong>Redis 高可用</strong>：Sentinel/Cluster 保证缓存层本身不整体宕机</li>
+</ul>
+</div>
+
+<div id="ch6-2">
+<h3>6.2 双写一致性方案对比</h3>
+
+<p>数据同时存在于 DB 和 Cache 中，更新时怎么保证一致？这是缓存面试中<strong>最有深度</strong>的问题。</p>
+
+<h4>四种经典模式</h4>
+
+<table>
+  <thead>
+    <tr>
+      <th>模式</th>
+      <th>读流程</th>
+      <th>写流程</th>
+      <th>一致性</th>
+      <th>适用场景</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Cache Aside</strong><br>(旁路缓存)</td>
+      <td>应用先读Cache，miss则读DB并回填Cache</td>
+      <td><strong>应用先更新DB，再删除Cache</strong>（由应用负责协调）</td>
+      <td>最终一致</td>
+      <td><strong>最通用，推荐</strong></td>
+    </tr>
+    <tr>
+      <td><strong>Read Through</strong><br>(读穿透)</td>
+      <td>应用只跟Cache交互，Cache miss时<strong>由缓存层自身</strong>负责从DB加载（对应用透明）</td>
+      <td>同 Cache Aside（应用直接写DB+删Cache）</td>
+      <td>最终一致</td>
+      <td>封装好的缓存中间件（如 Guava LoadingCache）</td>
+    </tr>
+    <tr>
+      <td><strong>Write Through</strong><br>(写穿透)</td>
+      <td>同 Read Through</td>
+      <td>应用只写Cache，<strong>由缓存层同步写入DB</strong>（应用不直接操作DB）</td>
+      <td><strong>强一致</strong>（Cache和DB同步更新）</td>
+      <td>写少读多 + 要求Cache与DB强一致</td>
+    </tr>
+    <tr>
+      <td><strong>Write Behind</strong><br>(写回/异步写)</td>
+      <td>同 Read Through</td>
+      <td>应用只写Cache，<strong>缓存层异步/批量刷入DB</strong>（类似 OS Page Cache 的 write-back）</td>
+      <td>弱一致（Cache崩溃可能丢数据）</td>
+      <td>极高写入吞吐（如计数器、日志、聚合统计）</td>
+    </tr>
+  </tbody>
+</table>
+
+<h4>Cache Aside 为什么是"先更新DB再删缓存"而不是"先删缓存再更新DB"？</h4>
+
+<div class="diagram">
+<svg width="650" height="220" viewBox="0 0 650 220" xmlns="http://www.w3.org/2000/svg">
+  <!-- Title -->
+  <text x="325" y="18" fill="#dc3545" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">先删缓存再更新DB的问题（并发不一致）</text>
+
+  <!-- Timeline -->
+  <text x="40" y="55" fill="#d29922" font-size="10" font-family="monospace">线程A(写)</text>
+  <text x="40" y="135" fill="#58a6ff" font-size="10" font-family="monospace">线程B(读)</text>
+
+  <line x1="120" y1="50" x2="620" y2="50" stroke="#d29922" stroke-width="1.5"/>
+  <line x1="120" y1="130" x2="620" y2="130" stroke="#58a6ff" stroke-width="1.5"/>
+
+  <!-- Time axis -->
+  <line x1="120" y1="170" x2="620" y2="170" stroke="#30363d" stroke-width="1"/>
+  <text x="370" y="190" fill="#6e7681" font-size="9" text-anchor="middle" font-family="monospace">时间 →</text>
+
+  <!-- Events -->
+  <circle cx="180" cy="50" r="5" fill="#d29922"/>
+  <text x="180" y="40" fill="#d29922" font-size="9" text-anchor="middle" font-family="monospace">①删缓存</text>
+
+  <circle cx="280" cy="130" r="5" fill="#58a6ff"/>
+  <text x="280" y="120" fill="#58a6ff" font-size="9" text-anchor="middle" font-family="monospace">②读Cache miss</text>
+
+  <circle cx="380" cy="130" r="5" fill="#58a6ff"/>
+  <text x="380" y="120" fill="#58a6ff" font-size="9" text-anchor="middle" font-family="monospace">③读DB(旧值)</text>
+
+  <circle cx="440" cy="130" r="5" fill="#58a6ff"/>
+  <text x="440" y="120" fill="#58a6ff" font-size="9" text-anchor="middle" font-family="monospace">④写回Cache(旧值)</text>
+
+  <circle cx="520" cy="50" r="5" fill="#d29922"/>
+  <text x="520" y="40" fill="#d29922" font-size="9" text-anchor="middle" font-family="monospace">⑤更新DB(新值)</text>
+
+  <!-- Result -->
+  <rect x="150" y="195" width="400" height="22" rx="4" fill="rgba(220,53,69,0.1)" stroke="#dc3545" stroke-width="1"/>
+  <text x="350" y="210" fill="#dc3545" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">结果：Cache=旧值，DB=新值 → 不一致！直到缓存过期</text>
+</svg>
+<div class="diagram-caption">图：先删缓存后更新DB在并发下产生不一致的时序</div>
+</div>
+
+<div class="callout antirez">
+<p>缓存一致性没有银弹。"先更新DB再删缓存"（Cache Aside）在极端并发下也有微小的不一致窗口：读线程 cache miss → 读DB（此时写线程更新了DB并删了缓存）→ 读线程用旧值回填缓存。但这个场景发生的概率极低——它要求"读DB"的耗时比"写DB+删缓存"还长，在实际系统中读通常比写快得多。且即使发生，合理的 TTL 设置也会让脏数据在可控时间内自愈。这就是工程中"足够好"的选择——追求绝对强一致需要引入分布式事务（如 2PC），代价是性能和可用性的显著下降。</p>
+</div>
+</div>
+
+<div id="ch6-3">
+<h3>6.3 延迟双删与 MQ 异步方案</h3>
+
+<h4>延迟双删</h4>
+
+<p>为了进一步降低不一致风险，可以在更新 DB 后<strong>延迟一段时间再次删除缓存</strong>：</p>
+
+<pre data-lang="java"><code>public void updateUser(User user) {
+    // 1. 先删缓存
+    redis.del("user:" + user.getId());
+
+    // 2. 更新数据库
+    userMapper.updateById(user);
+
+    // 3. 延迟再删一次（兜底删除并发期间的脏数据）
+    scheduledExecutor.schedule(() -> {
+        redis.del("user:" + user.getId());
+    }, 500, TimeUnit.MILLISECONDS);  // 延迟时间 > 一次读请求的耗时
+}</code></pre>
+
+<p>延迟时间怎么定？应该大于<strong>一次读请求从DB读+回填缓存的耗时</strong>，通常设 200ms~1s。为什么要"延迟"而不是立即二次删除？有两个原因：</p>
+<ul>
+  <li><strong>等待并发读请求完成</strong>：在第一次删除和DB更新之间，可能有读线程已经从DB读到旧值但还没回填缓存。延迟给这些"正在飞行中"的读请求足够时间完成回填，然后再删掉这些脏数据。</li>
+  <li><strong>等待主从同步完成</strong>：如果读请求打到从库，从库可能还没同步到最新数据。延迟时间需要覆盖主从复制延迟（通常几十毫秒），确保从库也已更新后再删缓存。</li>
+</ul>
+
+<h4>MQ 异步删除（更可靠的方案）</h4>
+
+<p>延迟双删的问题：如果第二次删除失败了呢？用 MQ 做重试保证：</p>
+
+<pre data-lang="java"><code>// 基于 Canal/Debezium + MQ 的缓存更新方案（最终一致性最强保证）
+// 核心思想：业务代码完全不感知缓存，通过CDC（Change Data Capture）监听DB变更
+//
+// Canal：阿里开源，伪装为MySQL slave监听binlog，适合MySQL生态
+// Debezium：Red Hat开源，基于Kafka Connect，支持MySQL/PostgreSQL/MongoDB等多种数据源
+//
+// 1. 业务代码只负责更新DB
+public void updateUser(User user) {
+    userMapper.updateById(user);  // 只写DB，不动缓存
+}
+
+// 2. Canal/Debezium 监听 MySQL binlog → 发送MQ消息
+// 3. MQ 消费者删除/更新缓存
+@RabbitListener(queues = "cache.invalidation")
+public void handleCacheInvalidation(CanalMessage msg) {
+    if ("user".equals(msg.getTable())) {
+        String key = "user:" + msg.getPrimaryKey();
+        boolean deleted = redis.del(key) > 0;
+        if (!deleted) {
+            // 删除失败，重新入队重试（设最大重试次数）
+            rabbitTemplate.convertAndSend("cache.invalidation.retry", msg);
+        }
+    }
+}</code></pre>
+
+<div class="callout tip">
+<p>面试终极答案（分层次展开）：<br>
+<strong>基础方案</strong>：Cache Aside（先更新DB再删缓存）+ 合理TTL兜底<br>
+<strong>进阶方案</strong>：延迟双删（降低并发脏数据概率）<br>
+<strong>最终方案</strong>：CDC 组件（Canal/Debezium）监听 binlog + MQ 异步删缓存（解耦且可重试，最终一致性最强保证）<br>
+CDC 方案的核心优势：① 业务代码零侵入，只写DB；② binlog 是可靠的变更源，不会遗漏；③ MQ 提供重试和幂等保证；④ 适用于多个下游消费者（缓存、搜索索引、数据仓库等）<br>
+面试时按这个递进结构回答，展现你的方案演进思路。</p>
+</div>
+</div>
+
+</section>
+
+<!-- ==================== 第七章 ==================== -->
+<section id="ch7">
+<h2>七、性能优化</h2>
+
+<div id="ch7-1">
+<h3>7.1 Pipeline 与 Lua 脚本</h3>
+
+<h4>Pipeline（管道）</h4>
+
+<p>Redis 单条命令执行很快（微秒级），但网络 RTT 通常是毫秒级。如果你要执行 1000 条命令，逐条发送意味着 1000 次 RTT。Pipeline 允许客户端<strong>一次性发送多条命令，服务端批量执行后一次性返回</strong>，将 1000 次 RTT 压缩为 1 次。</p>
+
+<pre data-lang="java"><code>// Jedis Pipeline 示例
+try (Jedis jedis = jedisPool.getResource()) {
+    Pipeline pipeline = jedis.pipelined();
+
+    // 批量设置 1000 个 key，只需 1 次网络往返
+    for (int i = 0; i &lt; 1000; i++) {
+        pipeline.set("key:" + i, "value:" + i);
+    }
+
+    // 一次性获取所有响应
+    List&lt;Object&gt; results = pipeline.syncAndReturnAll();
+}
+// 性能对比：逐条执行 ~1000ms（1000次RTT） vs Pipeline ~5ms（1次RTT+执行时间）</code></pre>
+
+<div class="callout warn">
+<p>Pipeline 注意事项：<br>
+1. 不是原子操作！中间可能插入其他客户端的命令<br>
+2. 批量不要太大（建议单次 ≤ 10000 条），否则占用内存缓冲<br>
+3. Cluster 模式下，Pipeline 只能发给同一个 slot 的命令（或使用 hash tag）</p>
+</div>
+
+<h4>Lua 脚本</h4>
+
+<p>当需要<strong>多条命令原子执行</strong>时，Lua 是首选方案。Redis 保证 Lua 脚本执行期间不会插入其他命令。</p>
+
+<pre data-lang="java"><code>// 经典场景：限流器（固定窗口）
+String luaScript = """
+    local key = KEYS[1]
+    local limit = tonumber(ARGV[1])
+    local window = tonumber(ARGV[2])
+
+    local current = tonumber(redis.call('GET', key) or '0')
+    if current >= limit then
+        return 0  -- 超过限制
+    end
+
+    current = redis.call('INCR', key)
+    if current == 1 then
+        redis.call('EXPIRE', key, window)  -- 首次设置过期
+    end
+    return 1  -- 允许通过
+    """;
+
+// 调用：每分钟最多 100 次请求
+Long allowed = jedis.eval(luaScript,
+    Collections.singletonList("rate:" + userId),
+    Arrays.asList("100", "60"));
+
+// Lua 的优势：INCR 和 EXPIRE 原子执行，不会出现 INCR 成功但 EXPIRE 失败的情况</code></pre>
+
+<div class="callout antirez">
+<p>Lua 脚本让 Redis 从"被动的数据容器"变成了"可编程的数据处理引擎"。它的价值不仅是原子性，更是<strong>减少网络往返</strong>——把本来需要多次 RTT 的 read-modify-write 模式压缩到一次。但要注意：Lua 脚本执行期间 Redis 是阻塞的，不要在脚本中做耗时操作。</p>
+<p><strong>Redis 7.0+ 的 Function</strong>：7.0 引入了 FUNCTION 命令体系作为 Lua EVAL 的演进方案。Function 将脚本预先注册到 Redis（类似存储过程），随 AOF/RDB 持久化，支持集群间复制，不再需要客户端每次发送脚本内容或依赖 EVALSHA 的缓存。新项目建议优先使用 FUNCTION LOAD + FCALL 替代裸 EVAL。</p>
+</div>
+</div>
+
+<div id="ch7-2">
+<h3>7.2 大 Key 问题</h3>
+
+<p>大 Key 是生产环境最常见的性能杀手之一。</p>
+
+<h4>什么算大 Key？</h4>
+<ul>
+  <li>String 类型：value > <strong>10KB</strong>（有些团队定义为 1MB）</li>
+  <li>集合类型：元素数量 > <strong>5000</strong>（或 value 总大小 > 10MB）</li>
+</ul>
+
+<h4>大 Key 的危害</h4>
+<ul>
+  <li><strong>阻塞主线程</strong>：DEL 大 key 时 O(n) 释放内存，可能阻塞数百毫秒</li>
+  <li><strong>网络带宽</strong>：读取一个 10MB 的 value，打满千兆网卡只需 800 次/s</li>
+  <li><strong>内存不均</strong>：Cluster 模式下导致节点间数据倾斜</li>
+  <li><strong>持久化慢</strong>：大 key 导致 fork COW 期间大量页面复制</li>
+</ul>
+
+<h4>发现大 Key</h4>
+
+<pre data-lang="bash"><code># 方式1：redis-cli 内置扫描（线上安全，渐进式）
+redis-cli --bigkeys -i 0.1   # -i 间隔0.1秒，降低影响
+
+# 方式2：memory usage 命令（Redis 4.0+）
+127.0.0.1:6379> MEMORY USAGE large_hash_key
+(integer) 10485760  # 10MB
+
+# 方式3：RDB 分析工具（离线分析）
+rdb --command memory dump.rdb --bytes 10240 -f large_keys.csv</code></pre>
+
+<h4>拆分方案</h4>
+
+<pre data-lang="java"><code>// 大 Hash 拆分示例：用户标签（原本一个 Hash 存 10w 个 field）
+// 拆分策略：按 field 哈希分桶
+
+public void setUserTag(long userId, String tag, String value) {
+    // 分成 100 个小 Hash
+    int bucket = Math.abs(tag.hashCode() % 100);
+    String key = "user_tags:" + userId + ":" + bucket;
+    jedis.hset(key, tag, value);
+}
+
+public String getUserTag(long userId, String tag) {
+    int bucket = Math.abs(tag.hashCode() % 100);
+    String key = "user_tags:" + userId + ":" + bucket;
+    return jedis.hget(key, tag);
+}
+
+// 大 String 拆分：把 JSON 拆成多个 field 存入 Hash
+// 大 List 拆分：按时间/ID范围分成多个 List key</code></pre>
+
+<pre data-lang="redis"><code># 安全删除大Key（Redis 4.0+）
+UNLINK large_key        # 异步删除：主线程只做解除引用，后台线程释放内存
+
+# Redis 4.0 之前的安全删除方案：
+# Hash: HSCAN + HDEL 分批删
+# List: LTRIM 逐步缩小
+# Set:  SSCAN + SREM 分批删</code></pre>
+</div>
+
+<div id="ch7-3">
+<h3>7.3 热点 Key 方案</h3>
+
+<p>当某个 key 的 QPS 达到单节点极限时（如微博热搜、秒杀商品），需要特殊处理。</p>
+
+<h4>解决方案矩阵</h4>
+
+<table>
+  <thead>
+    <tr>
+      <th>方案</th>
+      <th>原理</th>
+      <th>优点</th>
+      <th>缺点</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>本地缓存</strong></td>
+      <td>Caffeine L1 扛热点</td>
+      <td>零网络开销</td>
+      <td>多实例数据不一致</td>
+    </tr>
+    <tr>
+      <td><strong>Key 分散</strong></td>
+      <td>读时随机加后缀：key_1~key_N</td>
+      <td>分散到多个节点</td>
+      <td>更新时要更新N份</td>
+    </tr>
+    <tr>
+      <td><strong>读写分离</strong></td>
+      <td>读请求打到多个 slave</td>
+      <td>扩展读能力</td>
+      <td>有主从延迟</td>
+    </tr>
+  </tbody>
+</table>
+
+<pre data-lang="java"><code>// 热点Key分散读方案
+public String getHotKey(String baseKey) {
+    // 将一个热点key分散为8个副本，读时随机选一个
+    int replica = ThreadLocalRandom.current().nextInt(8);
+    String actualKey = baseKey + ":" + replica;
+    return redis.get(actualKey);
+}
+
+// 更新时需要更新所有副本
+public void updateHotKey(String baseKey, String value, int ttl) {
+    Pipeline pipeline = jedis.pipelined();
+    for (int i = 0; i &lt; 8; i++) {
+        pipeline.setex(baseKey + ":" + i, ttl, value);
+    }
+    pipeline.sync();
+}</code></pre>
+</div>
+
+<div id="ch7-4">
+<h3>7.4 Redis 事务（MULTI/EXEC vs Lua）</h3>
+
+<p>面试常问："Redis 支持事务吗？它和 MySQL 事务有什么区别？"</p>
+
+<h4>MULTI/EXEC 事务</h4>
+
+<pre data-lang="redis"><code>127.0.0.1:6379&gt; MULTI          # 开启事务
+OK
+127.0.0.1:6379&gt; SET key1 "a"   # 命令入队（不立即执行）
+QUEUED
+127.0.0.1:6379&gt; SET key2 "b"
+QUEUED
+127.0.0.1:6379&gt; EXEC           # 原子执行所有队列中的命令
+1) OK
+2) OK</code></pre>
+
+<h4>Redis 事务的特点（与 MySQL 对比）</h4>
+
+<table>
+  <thead>
+    <tr>
+      <th>特性</th>
+      <th>Redis 事务</th>
+      <th>MySQL 事务</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>原子性</td>
+      <td><strong>部分保证</strong>：要么全执行要么全不执行，但单条失败不回滚</td>
+      <td>完全保证（ROLLBACK）</td>
+    </tr>
+    <tr>
+      <td>隔离性</td>
+      <td>串行执行（单线程天然隔离）</td>
+      <td>四种隔离级别</td>
+    </tr>
+    <tr>
+      <td>回滚</td>
+      <td><strong>不支持</strong>：命令执行错误不回滚已执行的</td>
+      <td>支持</td>
+    </tr>
+    <tr>
+      <td>乐观锁</td>
+      <td>WATCH 实现 CAS</td>
+      <td>MVCC</td>
+    </tr>
+    <tr>
+      <td>持久性</td>
+      <td>取决于持久化配置</td>
+      <td>redo log 保证</td>
+    </tr>
+  </tbody>
+</table>
+
+<h4>WATCH 实现乐观锁（CAS）</h4>
+
+<pre data-lang="java"><code>// 经典场景：扣减余额（乐观锁方式）
+public boolean deductBalance(String userId, int amount) {
+    String key = "balance:" + userId;
+    while (true) {
+        jedis.watch(key);  // 监控key
+        int balance = Integer.parseInt(jedis.get(key));
+        if (balance &lt; amount) {
+            jedis.unwatch();
+            return false;  // 余额不足
+        }
+
+        Transaction tx = jedis.multi();  // 开启事务
+        tx.set(key, String.valueOf(balance - amount));
+        List&lt;Object&gt; result = tx.exec(); // 提交
+
+        if (result != null) {
+            return true;   // 成功
+        }
+        // result == null 表示 WATCH 的 key 被其他客户端修改了
+        // 重试（类似 CAS 自旋）
+    }
+}</code></pre>
+
+<div class="callout antirez">
+<p>Redis 事务为什么不支持回滚？因为 Redis 命令只有两种失败情况：语法错误（EXEC 前就能发现，会拒绝整个事务）和运行时类型错误（如对 String 执行 LPUSH）。后者是编程 bug，不应该在生产环境出现，为了它加回滚机制会让 Redis 变复杂变慢——不值得。</p>
+</div>
+
+<div class="callout tip">
+<p><strong>面试结论</strong>：实际开发中，需要原子性操作时<strong>优先用 Lua 脚本而非 MULTI/EXEC</strong>。原因：<br>
+1. Lua 可以做条件判断（if-else），MULTI/EXEC 只是批量执行，不能根据中间结果决定后续操作<br>
+2. Lua 是真正的原子执行，WATCH + MULTI 在高并发下重试率高<br>
+3. Lua 减少网络往返（一次性发送），性能更好</p>
+</div>
+</div>
+
+</section>
+
+<!-- ==================== 第八章 ==================== -->
+<section id="ch8">
+<h2>八、分布式锁</h2>
+
+<div id="ch8-1">
+<h3>8.1 SETNX 基础方案</h3>
+
+<p>分布式锁的最基本要求：<strong>互斥性、防死锁、防误删</strong>。</p>
+
+<h4>演进过程</h4>
+
+<pre data-lang="java"><code>// ❌ 版本1：最naive的实现（有死锁风险）
+redis.setnx("lock:order", "1");
+try { /* 业务逻辑 */ }
+finally { redis.del("lock:order"); }
+// 问题：如果进程崩溃，锁永远不会释放
+
+// ❌ 版本2：加过期时间（非原子操作）
+redis.setnx("lock:order", "1");
+redis.expire("lock:order", 30);  // 如果这两行之间崩溃？还是死锁
+try { /* 业务逻辑 */ }
+finally { redis.del("lock:order"); }
+
+// ❌ 版本3：SET NX PX 原子操作（但有误删风险）
+// 注意：正确的原子加锁命令是 SET key value NX PX milliseconds
+// NX = 不存在时才设置，PX = 过期时间（毫秒），一条命令原子完成
+redis.set("lock:order", "1", SetParams.nx().px(30000));
+try { /* 业务逻辑执行超过30秒... 锁过期了！*/ }
+finally { redis.del("lock:order"); }  // 删掉了别人的锁！
+
+// ✅ 版本4：正确的基础方案
+String requestId = UUID.randomUUID().toString(); // 唯一标识
+// SET lock:order <requestId> NX PX 30000 — 原子加锁+设过期
+Boolean locked = redis.set("lock:order", requestId,
+    SetParams.nx().px(30000));  // PX毫秒级精度，比EX秒级更精确
+
+if (Boolean.TRUE.equals(locked)) {
+    try {
+        // 业务逻辑
+    } finally {
+        // Lua 保证"判断+删除"的原子性
+        String luaScript = """
+            if redis.call('GET', KEYS[1]) == ARGV[1] then
+                return redis.call('DEL', KEYS[1])
+            else
+                return 0
+            end
+            """;
+        redis.eval(luaScript,
+            Collections.singletonList("lock:order"),
+            Collections.singletonList(requestId));
+    }
+}</code></pre>
+
+<div class="callout warn">
+<p>版本4仍有问题：<strong>如果业务执行时间 > 锁过期时间</strong>，锁会提前释放，导致并发问题。解决方案：引入<strong>看门狗（watchdog）机制</strong>——定时续期，这就是 Redisson 的核心设计。</p>
+</div>
+</div>
+
+<div id="ch8-2">
+<h3>8.2 Redlock 算法</h3>
+
+<p>上述方案在单机/主从 Redis 中有一个致命缺陷：<strong>master 宕机时锁可能丢失</strong>（异步复制导致 slave 没收到锁信息就被提升为 master）。antirez 为此提出了 Redlock 算法。</p>
+
+<h4>Redlock 核心流程</h4>
+
+<ol>
+  <li>获取当前时间戳 T1</li>
+  <li>依次向 <strong>N 个独立的 Redis 实例</strong>（建议 5 个）尝试加锁，每个实例设短超时（如 5~50ms）</li>
+  <li>如果在 <strong>多数节点（≥ N/2 + 1 = 3 个）</strong>加锁成功，且总耗时 &lt; 锁的 TTL</li>
+  <li>则认为加锁成功，锁的有效时间 = TTL - 总耗时</li>
+  <li>如果加锁失败，向所有节点发送解锁请求</li>
+</ol>
+
+<div class="diagram">
+<svg width="650" height="180" viewBox="0 0 650 180" xmlns="http://www.w3.org/2000/svg">
+  <!-- 5 Redis instances -->
+  <rect x="50" y="50" width="80" height="50" rx="6" fill="rgba(63,185,80,0.15)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="90" y="80" fill="#3fb950" font-size="10" text-anchor="middle" font-family="monospace">Redis 1 ✓</text>
+
+  <rect x="160" y="50" width="80" height="50" rx="6" fill="rgba(63,185,80,0.15)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="200" y="80" fill="#3fb950" font-size="10" text-anchor="middle" font-family="monospace">Redis 2 ✓</text>
+
+  <rect x="270" y="50" width="80" height="50" rx="6" fill="rgba(220,53,69,0.15)" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="310" y="80" fill="#dc3545" font-size="10" text-anchor="middle" font-family="monospace">Redis 3 ✗</text>
+
+  <rect x="380" y="50" width="80" height="50" rx="6" fill="rgba(63,185,80,0.15)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="420" y="80" fill="#3fb950" font-size="10" text-anchor="middle" font-family="monospace">Redis 4 ✓</text>
+
+  <rect x="490" y="50" width="80" height="50" rx="6" fill="rgba(220,53,69,0.15)" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="530" y="80" fill="#dc3545" font-size="10" text-anchor="middle" font-family="monospace">Redis 5 ✗</text>
+
+  <!-- Result -->
+  <text x="325" y="30" fill="#8b949e" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif">5个独立Redis实例（非主从关系）</text>
+  <rect x="180" y="120" width="290" height="35" rx="6" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="325" y="142" fill="#3fb950" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">3/5 成功 ≥ 多数派 → 加锁成功</text>
+</svg>
+<div class="diagram-caption">图：Redlock 在 5 个独立实例上加锁，3个成功即可</div>
+</div>
+
+<h4>Redlock 的争议（Martin Kleppmann vs antirez）</h4>
+
+<div class="callout antirez">
+<p>Martin Kleppmann（《DDIA》作者）在博文 "How to do distributed locking" 中对 Redlock 提出了两个核心质疑：</p>
+<p>1. <strong>时钟漂移问题</strong>：Redlock 依赖各节点的时钟大致同步。如果某个节点发生时钟跳跃（NTP 校时、虚拟机迁移），锁可能提前过期而客户端不自知，导致两个客户端同时持有锁。</p>
+<p>2. <strong>进程暂停（GC pause）</strong>：客户端获取锁后发生长时间 GC 停顿，醒来时锁已过期且被其他客户端获取，但当前客户端仍以为自己持有锁。</p>
+<p>Kleppmann 的结论：如果你需要正确性（correctness），用 ZooKeeper/etcd 的顺序节点 + session 机制；如果只需要效率（防重复工作），单实例 Redis + TTL 就够了，Redlock 处于一个尴尬的中间地带——它增加了复杂性却无法提供真正的安全保证。</p>
+<p>我（antirez）的回应（"Is Redlock safe?"）：Redlock 在时钟偏移可控（NTP 同步误差 << 锁 TTL）的前提下是安全的。时钟跳跃可以通过运维手段避免（使用 adjtime 渐进校时而非 settimeofday 跳变）。但我承认，分布式锁的"绝对正确"需要 fencing token（递增序号）配合——这实际上是任何基于 TTL 的锁都需要面对的问题，不只是 Redlock。</p>
+</div>
+
+<h4>Fencing Token：分布式锁的终极安全保障</h4>
+
+<p>Kleppmann 提出的核心问题：即使你获取了锁，在持有锁期间如果发生 GC 暂停（STW 可达数百毫秒），锁可能在你不知情的情况下过期。此时其他客户端获取了同一把锁，两个客户端同时"持有锁"操作共享资源。</p>
+
+<p><strong>Fencing Token 方案</strong>：每次获取锁时生成一个单调递增的序号（token），操作共享资源时带上这个 token，资源服务端拒绝比当前最大 token 更小的请求。</p>
+
+<pre data-lang="java"><code>// Fencing Token 示例：防止锁失效后的脏写
+public class FencedLock {
+    // 获取锁时同时获取单调递增的 fencing token
+    public LockResult tryLock(String resource) {
+        long token = redis.incr("lock_token:" + resource); // 单调递增
+        boolean locked = redis.set("lock:" + resource, token, "NX", "EX", 30);
+        return new LockResult(locked, token);
+    }
+}
+
+// 写入存储时携带 token
+public void updateWithFencing(String key, String value, long fencingToken) {
+    // 存储层（如数据库）检查 token
+    // UPDATE resource SET value=?, token=? WHERE key=? AND token &lt; ?
+    int rows = jdbc.update(
+        "UPDATE resources SET val=?, fence_token=? WHERE key=? AND fence_token &lt; ?",
+        value, fencingToken, key, fencingToken);
+    if (rows == 0) {
+        throw new FencingException("Stale lock: token " + fencingToken + " rejected");
+    }
+}</code></pre>
+
+<div class="callout warn">
+<p><strong>Kleppmann vs antirez 争论的核心分歧</strong>：<br>
+- Kleppmann 认为：分布式锁的安全性不能依赖"时间假设"（timing assumptions），这属于异步系统模型（asynchronous model）的经典问题。任何基于 TTL 的锁在 GC 暂停、网络延迟、时钟漂移面前都不安全，必须有 fencing 机制兜底<br>
+- antirez 认为：在合理的运维条件下（使用 adjtime 渐进校时、合理设置 TTL 远大于正常操作时间），Redlock 在实际工程中是足够安全的。完全的"安全"需要同步系统模型，这在现实中不存在<br>
+- <strong>面试结论</strong>：两人的分歧本质是"理论正确性 vs 工程实用性"。如果你的场景是"最多做重复工作"（效率锁 / efficiency lock），Redis 单实例够了；如果是"绝对不能并发执行"（正确性锁 / correctness lock），要么用 ZooKeeper/etcd（基于 session + 顺序节点的 CP 锁），要么 Redis 锁 + fencing token 配合存储端校验</p>
+</div>
+
+<div class="callout tip">
+<p>面试建议：<br>
+1. 先说 Redlock 的设计思路（多数派 + 时间约束）<br>
+2. 再主动提到 Martin Kleppmann 的批评（展示你看过更深层的讨论）<br>
+3. 结论："实际工程中，如果对锁的正确性要求极高（如金融扣款），我会用 ZooKeeper/etcd 的 CP 锁；如果只是防重复计算、防缓存击穿，Redisson 的单实例锁 + watchdog 就足够了"</p>
+</div>
+</div>
+
+<div id="ch8-3">
+<h3>8.3 Redisson 实战</h3>
+
+<p>Redisson 是 Java 生态中最成熟的 Redis 分布式锁实现，核心特性：<strong>可重入、watchdog 自动续期、公平锁、读写锁</strong>。</p>
+
+<h4>看门狗（Watchdog）机制</h4>
+
+<p>Redisson 加锁时如果不指定 leaseTime，会启动 watchdog：默认 <code>lockWatchdogTimeout = 30秒</code>（即锁的初始 TTL 为 30s），每隔 <code>lockWatchdogTimeout / 3 = 10秒</code> 检查一次，如果持有锁的线程仍然存活，就自动将锁的 TTL 续期到 30s。持有锁的线程正常执行时，锁永远不会过期；线程挂了（或实例宕机），watchdog 的定时任务（基于 Netty 的 HashedWheelTimer）也随之停止，锁在最多 30s 后自然过期释放——避免了死锁。</p>
+
+<pre data-lang="java"><code>// Redisson 使用示例
+@Autowired
+private RedissonClient redissonClient;
+
+public void deductStock(String productId) {
+    RLock lock = redissonClient.getLock("lock:stock:" + productId);
+
+    try {
+        // 尝试加锁：等待3秒，不设leaseTime（启用watchdog）
+        boolean locked = lock.tryLock(3, TimeUnit.SECONDS);
+        if (!locked) {
+            throw new BusinessException("系统繁忙，请重试");
+        }
+
+        // 业务逻辑（watchdog 会自动续期，不用担心超时）
+        int stock = getStock(productId);
+        if (stock &lt;= 0) throw new BusinessException("库存不足");
+        decreaseStock(productId);
+
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+    } finally {
+        // 只有持有锁的线程才能解锁
+        if (lock.isHeldByCurrentThread()) {
+            lock.unlock();
+        }
+    }
+}
+
+// 可重入锁示例（同一线程可多次加锁）
+public void methodA() {
+    RLock lock = redissonClient.getLock("lock:resource");
+    lock.lock();
+    try {
+        methodB();  // methodB 也加同一把锁，不会死锁
+    } finally {
+        lock.unlock();
+    }
+}
+public void methodB() {
+    RLock lock = redissonClient.getLock("lock:resource");
+    lock.lock();  // 可重入：内部计数器 +1
+    try { /* ... */ }
+    finally { lock.unlock(); }  // 计数器 -1，到0才真正释放
+}</code></pre>
+
+<h4>Redisson 锁的 Lua 脚本核心逻辑</h4>
+
+<pre data-lang="lua"><code>-- 加锁 Lua 脚本（简化版）
+-- KEYS[1] = 锁名称
+-- ARGV[1] = leaseTime (ms)
+-- ARGV[2] = 客户端唯一标识 (UUID:threadId)
+
+if redis.call('EXISTS', KEYS[1]) == 0 then
+    -- 锁不存在：加锁 + 设置过期时间
+    redis.call('HINCRBY', KEYS[1], ARGV[2], 1)  -- Hash记录重入次数
+    redis.call('PEXPIRE', KEYS[1], ARGV[1])
+    return nil  -- 加锁成功
+end
+
+if redis.call('HEXISTS', KEYS[1], ARGV[2]) == 1 then
+    -- 同一客户端重入：计数器+1
+    redis.call('HINCRBY', KEYS[1], ARGV[2], 1)
+    redis.call('PEXPIRE', KEYS[1], ARGV[1])
+    return nil  -- 重入成功
+end
+
+-- 锁被其他客户端持有，返回剩余TTL
+return redis.call('PTTL', KEYS[1])</code></pre>
+
+<div class="callout tip">
+<p><strong>面试总结分布式锁选型</strong>：<br>
+<table>
+  <tr><th>场景</th><th>方案</th></tr>
+  <tr><td>简单防重（如防重复提交）</td><td>SETNX + EX + UUID 即可</td></tr>
+  <tr><td>生产级业务锁（库存扣减等）</td><td><strong>Redisson（推荐）</strong></td></tr>
+  <tr><td>极端一致性要求（金融级）</td><td>ZooKeeper / etcd</td></tr>
+</table>
+</p>
+</div>
+</div>
+
+</section>
+
+<!-- ==================== 第九章 ==================== -->
+<section id="ch9">
+<h2>九、生产实战与运维</h2>
+
+<div id="ch9-0">
+<h3>面试追问链路图</h3>
+
+<p>面试官的追问不是随机的，而是沿着<strong>固定的知识链路</strong>深入。以下是最常见的 4 条追问链，每一步都是上一步的自然延伸：</p>
+
+<div class="diagram">
+<svg width="720" height="420" viewBox="0 0 720 420" xmlns="http://www.w3.org/2000/svg">
+  <!-- Chain 1: 数据结构链 -->
+  <text x="20" y="30" fill="#dc3545" font-size="12" font-family="SF Pro Display, sans-serif" font-weight="bold">链路1: 数据结构</text>
+  <rect x="20" y="40" width="120" height="28" rx="4" fill="rgba(220,53,69,0.1)" stroke="#dc3545" stroke-width="1"/>
+  <text x="80" y="58" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">String有哪些编码?</text>
+  <text x="148" y="58" fill="#dc3545" font-size="12">→</text>
+  <rect x="160" y="40" width="110" height="28" rx="4" fill="rgba(220,53,69,0.1)" stroke="#dc3545" stroke-width="1"/>
+  <text x="215" y="58" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">embstr为何44B?</text>
+  <text x="278" y="58" fill="#dc3545" font-size="12">→</text>
+  <rect x="290" y="40" width="105" height="28" rx="4" fill="rgba(220,53,69,0.1)" stroke="#dc3545" stroke-width="1"/>
+  <text x="342" y="58" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">jemalloc分配?</text>
+  <text x="403" y="58" fill="#dc3545" font-size="12">→</text>
+  <rect x="415" y="40" width="120" height="28" rx="4" fill="rgba(220,53,69,0.1)" stroke="#dc3545" stroke-width="1"/>
+  <text x="475" y="58" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">SDS预分配策略?</text>
+  <text x="543" y="58" fill="#dc3545" font-size="12">→</text>
+  <rect x="555" y="40" width="140" height="28" rx="4" fill="rgba(220,53,69,0.1)" stroke="#dc3545" stroke-width="1"/>
+  <text x="625" y="58" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">渐进式rehash原理?</text>
+
+  <!-- Chain 2: 持久化链 -->
+  <text x="20" y="110" fill="#3fb950" font-size="12" font-family="SF Pro Display, sans-serif" font-weight="bold">链路2: 持久化→高可用</text>
+  <rect x="20" y="120" width="100" height="28" rx="4" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-width="1"/>
+  <text x="70" y="138" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">RDB怎么实现?</text>
+  <text x="128" y="138" fill="#3fb950" font-size="12">→</text>
+  <rect x="140" y="120" width="95" height="28" rx="4" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-width="1"/>
+  <text x="187" y="138" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">fork有何风险?</text>
+  <text x="243" y="138" fill="#3fb950" font-size="12">→</text>
+  <rect x="255" y="120" width="110" height="28" rx="4" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-width="1"/>
+  <text x="310" y="138" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">主从怎么同步?</text>
+  <text x="373" y="138" fill="#3fb950" font-size="12">→</text>
+  <rect x="385" y="120" width="110" height="28" rx="4" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-width="1"/>
+  <text x="440" y="138" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">数据会丢吗?</text>
+  <text x="503" y="138" fill="#3fb950" font-size="12">→</text>
+  <rect x="515" y="120" width="110" height="28" rx="4" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-width="1"/>
+  <text x="570" y="138" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">脑裂怎么解决?</text>
+
+  <!-- Chain 3: 缓存问题链 -->
+  <text x="20" y="190" fill="#d29922" font-size="12" font-family="SF Pro Display, sans-serif" font-weight="bold">链路3: 缓存设计</text>
+  <rect x="20" y="200" width="110" height="28" rx="4" fill="rgba(210,153,34,0.1)" stroke="#d29922" stroke-width="1"/>
+  <text x="75" y="218" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">缓存怎么保一致?</text>
+  <text x="138" y="218" fill="#d29922" font-size="12">→</text>
+  <rect x="150" y="200" width="120" height="28" rx="4" fill="rgba(210,153,34,0.1)" stroke="#d29922" stroke-width="1"/>
+  <text x="210" y="218" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">为何先更新DB再删?</text>
+  <text x="278" y="218" fill="#d29922" font-size="12">→</text>
+  <rect x="290" y="200" width="120" height="28" rx="4" fill="rgba(210,153,34,0.1)" stroke="#d29922" stroke-width="1"/>
+  <text x="350" y="218" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">删除失败怎么办?</text>
+  <text x="418" y="218" fill="#d29922" font-size="12">→</text>
+  <rect x="430" y="200" width="110" height="28" rx="4" fill="rgba(210,153,34,0.1)" stroke="#d29922" stroke-width="1"/>
+  <text x="485" y="218" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">穿透/击穿/雪崩?</text>
+  <text x="548" y="218" fill="#d29922" font-size="12">→</text>
+  <rect x="560" y="200" width="130" height="28" rx="4" fill="rgba(210,153,34,0.1)" stroke="#d29922" stroke-width="1"/>
+  <text x="625" y="218" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">热点Key怎么处理?</text>
+
+  <!-- Chain 4: 分布式锁链 -->
+  <text x="20" y="270" fill="#a371f7" font-size="12" font-family="SF Pro Display, sans-serif" font-weight="bold">链路4: 分布式锁</text>
+  <rect x="20" y="280" width="110" height="28" rx="4" fill="rgba(163,113,247,0.1)" stroke="#a371f7" stroke-width="1"/>
+  <text x="75" y="298" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">Redis怎么做锁?</text>
+  <text x="138" y="298" fill="#a371f7" font-size="12">→</text>
+  <rect x="150" y="280" width="110" height="28" rx="4" fill="rgba(163,113,247,0.1)" stroke="#a371f7" stroke-width="1"/>
+  <text x="205" y="298" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">超时了怎么办?</text>
+  <text x="268" y="298" fill="#a371f7" font-size="12">→</text>
+  <rect x="280" y="280" width="100" height="28" rx="4" fill="rgba(163,113,247,0.1)" stroke="#a371f7" stroke-width="1"/>
+  <text x="330" y="298" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">Watchdog原理?</text>
+  <text x="388" y="298" fill="#a371f7" font-size="12">→</text>
+  <rect x="400" y="280" width="120" height="28" rx="4" fill="rgba(163,113,247,0.1)" stroke="#a371f7" stroke-width="1"/>
+  <text x="460" y="298" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">主从切换锁丢了?</text>
+  <text x="528" y="298" fill="#a371f7" font-size="12">→</text>
+  <rect x="540" y="280" width="130" height="28" rx="4" fill="rgba(163,113,247,0.1)" stroke="#a371f7" stroke-width="1"/>
+  <text x="605" y="298" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">Redlock安全吗?</text>
+
+  <!-- Summary -->
+  <rect x="20" y="340" width="680" height="65" rx="8" fill="rgba(88,166,255,0.05)" stroke="#58a6ff" stroke-width="1"/>
+  <text x="360" y="365" fill="#58a6ff" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">准备策略：每个知识点不要孤立记忆，而是沿着追问链路准备 3~5 层深度</text>
+  <text x="360" y="385" fill="#8b949e" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">面试官问第1层是送分，第2层是基本功，第3层开始区分候选人水平，第4~5层是加分项</text>
+</svg>
+<div class="diagram-caption">图：面试高频追问链路 — 每条链路都是面试官的"标准深入路径"</div>
+</div>
+</div>
+
+<div id="ch9-1">
+<h3>9.1 容量规划与监控</h3>
+
+<h4>内存容量评估公式</h4>
+
+<p>面试中被问到"你们 Redis 集群怎么规划容量？"时，需要给出量化思路：</p>
+
+<pre data-lang="text"><code>所需总内存 = 单条数据大小 × 预估数据量 × 膨胀系数
+
+膨胀系数通常 1.5~2.0，包含：
+- Redis 对象头开销（redisObject 16字节 + dictEntry ~70字节/key）
+- 内存碎片率（通常 1.0~1.5，通过 INFO memory 的 mem_fragmentation_ratio 监控）
+- fork 时 COW 预留（建议预留 50% 给 BGSAVE/AOF重写）
+
+示例计算：
+- 1000万个 key，平均 value 500字节
+- 纯数据量 = 10M × 500B = 5GB
+- 加上 key 开销 = 10M × (500 + 70) = 5.7GB
+- 膨胀系数 1.5 → 约 8.5GB
+- fork 预留 → 实际需要 ~13GB → 单实例 16GB
+- 如果需要高可用 → 3节点 × 16GB</code></pre>
+
+<h4>必须监控的关键指标</h4>
+
+<table>
+  <thead>
+    <tr>
+      <th>指标</th>
+      <th>获取方式</th>
+      <th>告警阈值</th>
+      <th>含义</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>used_memory</code></td>
+      <td>INFO memory</td>
+      <td>&gt; maxmemory * 80%</td>
+      <td>内存使用量，接近上限要扩容</td>
+    </tr>
+    <tr>
+      <td><code>mem_fragmentation_ratio</code></td>
+      <td>INFO memory</td>
+      <td>&gt; 1.5 或 &lt; 1.0</td>
+      <td>&gt;1.5 碎片过多; &lt;1.0 说明用了swap</td>
+    </tr>
+    <tr>
+      <td><code>connected_clients</code></td>
+      <td>INFO clients</td>
+      <td>&gt; maxclients * 80%</td>
+      <td>连接数即将耗尽</td>
+    </tr>
+    <tr>
+      <td><code>instantaneous_ops_per_sec</code></td>
+      <td>INFO stats</td>
+      <td>突增/突降 50%+</td>
+      <td>QPS 异常波动</td>
+    </tr>
+    <tr>
+      <td><code>keyspace_hit_rate</code></td>
+      <td>hits/(hits+misses)</td>
+      <td>&lt; 90%</td>
+      <td>命中率过低，缓存可能失效</td>
+    </tr>
+    <tr>
+      <td><code>latest_fork_usec</code></td>
+      <td>INFO stats</td>
+      <td>&gt; 100ms</td>
+      <td>fork耗时过长，实例数据量太大</td>
+    </tr>
+    <tr>
+      <td><code>slowlog</code></td>
+      <td>SLOWLOG GET</td>
+      <td>任何 &gt;10ms 的命令</td>
+      <td>慢查询，需要优化命令或数据结构</td>
+    </tr>
+    <tr>
+      <td><code>rejected_connections</code></td>
+      <td>INFO stats</td>
+      <td>&gt; 0</td>
+      <td>连接被拒绝，maxclients 太小或连接泄漏</td>
+    </tr>
+  </tbody>
+</table>
+
+<pre data-lang="redis"><code># 生产环境关键配置
+maxmemory 10gb                    # 明确设置上限
+maxmemory-policy allkeys-lru      # 淘汰策略
+maxclients 10000                  # 最大连接数
+
+# 慢查询配置
+slowlog-log-slower-than 10000     # 超过10ms记录慢日志
+slowlog-max-len 1000              # 保留最近1000条
+
+# 安全配置
+rename-command FLUSHALL ""        # 禁用危险命令
+rename-command KEYS ""            # 禁用KEYS（生产环境用SCAN代替）
+rename-command FLUSHDB ""</code></pre>
+</div>
+
+<div id="ch9-2">
+<h3>9.2 连接池与 Spring Boot 整合</h3>
+
+<h4>Lettuce vs Jedis 选型</h4>
+
+<table>
+  <thead>
+    <tr>
+      <th>特性</th>
+      <th>Lettuce（Spring Boot 默认）</th>
+      <th>Jedis</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>线程安全</td>
+      <td><strong>线程安全</strong>（单连接多线程复用）</td>
+      <td>非线程安全（需连接池）</td>
+    </tr>
+    <tr>
+      <td>底层通信</td>
+      <td>Netty NIO</td>
+      <td>BIO</td>
+    </tr>
+    <tr>
+      <td>连接模式</td>
+      <td>共享连接 / 连接池可选</td>
+      <td>必须用连接池</td>
+    </tr>
+    <tr>
+      <td>Cluster 支持</td>
+      <td><strong>原生支持</strong>，自动拓扑刷新</td>
+      <td>支持，但刷新需手动</td>
+    </tr>
+    <tr>
+      <td>响应式</td>
+      <td>✓ 支持 Reactive</td>
+      <td>✗</td>
+    </tr>
+    <tr>
+      <td>推荐场景</td>
+      <td><strong>新项目首选</strong></td>
+      <td>旧项目、需精细控制连接池</td>
+    </tr>
+  </tbody>
+</table>
+
+<h4>Spring Boot + Lettuce 生产配置</h4>
+
+<pre data-lang="yaml"><code># application.yml
+spring:
+  redis:
+    host: redis-cluster.internal
+    port: 6379
+    password: ${REDIS_PASSWORD}
+    timeout: 3000ms          # 命令超时
+    connect-timeout: 1000ms  # 连接超时
+
+    lettuce:
+      pool:
+        max-active: 50       # 最大连接数（根据QPS和命令耗时计算）
+        max-idle: 20         # 最大空闲连接
+        min-idle: 5          # 最小空闲连接（避免冷启动）
+        max-wait: 2000ms     # 获取连接最大等待时间
+      cluster:
+        refresh:
+          adaptive: true     # 自适应拓扑刷新（节点故障时自动感知）
+          period: 30s        # 定时刷新间隔</code></pre>
+
+<pre data-lang="java"><code>// 连接池大小计算公式
+// maxActive = 业务线程数 × 每个线程同时使用的连接数
+// 通常：maxActive = QPS × 平均命令耗时(秒)
+// 示例：QPS=5000, 平均耗时2ms → 5000 × 0.002 = 10（理论最小值）
+// 实际建议留 2~3 倍余量 → 20~30
+
+// RedisTemplate 自定义序列化（避免默认JDK序列化的坑）
+@Configuration
+public class RedisConfig {
+    @Bean
+    public RedisTemplate&lt;String, Object&gt; redisTemplate(
+            RedisConnectionFactory factory) {
+        RedisTemplate&lt;String, Object&gt; template = new RedisTemplate&lt;&gt;();
+        template.setConnectionFactory(factory);
+
+        // Key 用 String 序列化
+        template.setKeySerializer(new StringRedisSerializer());
+        template.setHashKeySerializer(new StringRedisSerializer());
+
+        // Value 用 JSON 序列化（可读性好，跨语言兼容）
+        Jackson2JsonRedisSerializer&lt;Object&gt; jsonSerializer =
+            new Jackson2JsonRedisSerializer&lt;&gt;(Object.class);
+        ObjectMapper om = new ObjectMapper();
+        om.activateDefaultTyping(om.getPolymorphicTypeValidator(),
+            ObjectMapper.DefaultTyping.NON_FINAL);
+        jsonSerializer.setObjectMapper(om);
+
+        template.setValueSerializer(jsonSerializer);
+        template.setHashValueSerializer(jsonSerializer);
+        return template;
+    }
+}</code></pre>
+</div>
+
+<div id="ch9-3">
+<h3>9.3 线上事故案例</h3>
+
+<p>以下是来自真实生产环境的事故复盘，面试中如果能结合亲身经历讲这些"踩坑故事"，比背八股文有效 10 倍。</p>
+
+<h4>事故一：KEYS * 导致全站 502</h4>
+
+<div class="callout warn">
+<p><strong>场景</strong>：运维同事在生产 Redis（单线程、120GB 数据）上执行 <code>KEYS user:*</code> 排查问题。</p>
+<p><strong>后果</strong>：命令执行了 8 秒，期间 Redis 完全阻塞，所有请求超时，触发雪崩。</p>
+<p><strong>根因</strong>：KEYS 是 O(n) 遍历所有 key，单线程模型下阻塞一切。</p>
+<p><strong>修复</strong>：① 生产环境 rename-command KEYS ""  ② 需要模式匹配时用 <code>SCAN</code>（游标式、不阻塞）</p>
+</div>
+
+<pre data-lang="redis"><code># 正确做法：SCAN 替代 KEYS
+# SCAN 是渐进式遍历，每次返回少量结果+游标，不阻塞
+127.0.0.1:6379> SCAN 0 MATCH user:* COUNT 100
+1) "17920"    ← 下次游标
+2) 1) "user:1001"
+   2) "user:1002"
+   ...</code></pre>
+
+<h4>事故二：大 Key 删除引发主从切换</h4>
+
+<div class="callout warn">
+<p><strong>场景</strong>：业务在 Redis 中存了一个 500 万元素的 Set（运营活动参与者名单），活动结束后 DEL 这个 key。</p>
+<p><strong>后果</strong>：DEL 耗时 2.3 秒（释放 500 万个元素的内存），Sentinel 判定 master 超时，触发故障转移。主从切换期间业务抖动 15 秒。</p>
+<p><strong>修复</strong>：① 用 <code>UNLINK</code> 替代 DEL（异步释放内存）② 大集合用 SSCAN + SREM 分批删除  ③ 设计时就要避免产生大 Key</p>
+</div>
+
+<h4>事故三：缓存与 DB 不一致导致超卖</h4>
+
+<div class="callout warn">
+<p><strong>场景</strong>：电商库存扣减，先更新 DB 再删缓存。高并发下删缓存偶发失败（网络抖动），导致缓存中残留旧库存，用户看到"有货"实际已售罄。</p>
+<p><strong>后果</strong>：超卖 200 单，需要人工退款道歉。</p>
+<p><strong>修复</strong>：① 删缓存加重试（MQ 异步重试 3 次）② 库存扣减改用 Lua 脚本原子操作  ③ 兜底：设置短 TTL（30s），即使删除失败也能自愈</p>
+</div>
+
+<pre data-lang="java"><code>// 库存扣减的正确实现：Lua 原子操作
+String decrStockLua = """
+    local stock = tonumber(redis.call('GET', KEYS[1]))
+    if stock == nil then
+        return -1   -- key不存在，需要回源
+    end
+    if stock &lt;= 0 then
+        return 0    -- 库存不足
+    end
+    redis.call('DECRBY', KEYS[1], ARGV[1])
+    return stock - tonumber(ARGV[1])
+    """;
+
+// 调用
+Long remain = (Long) jedis.eval(decrStockLua,
+    Collections.singletonList("stock:" + skuId),
+    Collections.singletonList("1"));
+
+if (remain == -1) {
+    // 缓存未命中，加锁回源DB
+} else if (remain &lt; 0) {
+    // 库存不足，拒绝
+    redis.incrBy("stock:" + skuId, 1); // 回滚
+} else {
+    // 扣减成功，异步更新DB
+}</code></pre>
+
+<div class="callout tip">
+<p><strong>面试中讲线上事故的模板</strong>：<br>
+① 背景（什么业务、什么量级）→ ② 现象（告警、影响范围）→ ③ 排查过程（怎么定位）→ ④ 根因 → ⑤ 修复方案 → ⑥ 后续预防措施<br>
+用这个结构讲 1~2 个自己经历的真实 case，比背 10 页八股文更能打动面试官。</p>
+</div>
+</div>
+
+</section>
+
+</main>
+</div>
+
+<button class="back-to-top" aria-label="回到顶部">&uarr;</button>
+<script src="./shared/script.js"></script>
+</body>
+</html>
