@@ -2655,7 +2655,7 @@ public void pollDelayedMessages() {
         <h4>避免 Rebalance 的最佳实践</h4>
 
         <pre data-lang="Java"><code>// ====== 关键配置：减少不必要的 Rebalance ======
-props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 25000);      // 心跳超时25s（默认10s太短）
+props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 45000);      // 心跳超时45s（3.0+默认45s；2.x默认10s偏短）
 props.put(ConsumerConfig.HEARTBEAT_INTERVAL_MS_CONFIG, 5000);    // 心跳间隔5s
 props.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 600000);   // poll间隔上限10min（处理慢也不被踢）
 props.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 50);           // 每次少拉点，确保能在interval内处理完
@@ -2841,7 +2841,7 @@ consumer.setPullBatchSize(64); // 增大单次拉取量</code></pre>
                 写入路径不用 sendfile，而是普通的 <code>FileChannel.write()</code> 到 Page Cache</li>
             <li><strong>mmap 的角色：</strong>Kafka 对 <code>.index</code> 和 <code>.timeindex</code> 文件使用 mmap（MappedByteBuffer），但 <code>.log</code> 文件不用 mmap。
                 原因：.log 文件可能很大（1GB），mmap 映射过大文件在某些 OS 上有性能问题（页表压力、文件关闭时 flush 阻塞）</li>
-            <li><strong>稀疏索引：</strong>不为每条消息建索引（太浪费空间），每隔 <code>index.interval.bytes</code>（默认4KB）才记录一条。空间换时间的折中</li>
+            <li><strong>稀疏索引：</strong>不为每条消息建索引（太浪费空间），每隔 <code>log.index.interval.bytes</code>（默认4096字节即4KB）才记录一条。空间换时间的折中</li>
             <li><strong>Log Compaction：</strong>保留每个 Key 的最新一条消息，删除旧版本。适用于 CDC / 状态变更等场景（如 KTable 的 changelog topic）</li>
         </ul>
 

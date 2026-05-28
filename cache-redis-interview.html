@@ -34,7 +34,7 @@
       <a href="#ch2" class="nav-group-title">二、Redis数据结构与编码</a>
       <div class="nav-items">
         <a href="#ch2-1">SDS 动态字符串</a>
-        <a href="#ch2-2">五大类型与编码</a>
+        <a href="#ch2-2">redisObject与五大类型</a>
         <a href="#ch2-2b">渐进式Rehash</a>
         <a href="#ch2-3">跳跃表原理</a>
         <a href="#ch2-4">紧凑型结构图解</a>
@@ -53,7 +53,7 @@
       <div class="nav-items">
         <a href="#ch4-1">过期删除策略</a>
         <a href="#ch4-2">八种淘汰策略</a>
-        <a href="#ch4-3">LRU vs LFU 实现</a>
+        <a href="#ch4-3">LRU与LFU算法原理</a>
       </div>
     </div>
     <div class="nav-group">
@@ -603,7 +603,47 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
 </div>
 
 <div id="ch2-2">
-<h3>2.2 五大数据类型与底层编码</h3>
+<h3>2.2 redisObject 对象系统与五大数据类型</h3>
+
+<p>Redis 中每一个 key-value 对的 value 都是一个 <strong>redisObject</strong>。理解这个对象模型是回答所有数据结构面试题的基础。</p>
+
+<h4>redisObject 结构（面试高频考点）</h4>
+
+<pre data-lang="c"><code>// 源码：server.h
+typedef struct redisObject {
+    unsigned type:4;       // 数据类型（STRING/LIST/HASH/SET/ZSET）— 4bit
+    unsigned encoding:4;   // 底层编码（int/embstr/raw/ziplist/hashtable等）— 4bit
+    unsigned lru:LRU_BITS; // LRU时间戳或LFU计数器 — 24bit
+    int refcount;          // 引用计数（用于内存回收+对象共享）— 32bit
+    void *ptr;             // 指向底层数据结构的指针 — 64bit
+} robj;  // 总大小：16字节</code></pre>
+
+<div class="callout tip">
+<p><strong>面试常问：type 和 encoding 的关系？</strong><br>
+type 是对外的数据类型（用户可见，通过 <code>TYPE key</code> 查看），encoding 是底层实现（通过 <code>OBJECT ENCODING key</code> 查看）。同一个 type 可能有多种 encoding——Redis 根据数据特征自动选择最优编码，对用户透明。这种"一个接口多种实现"的设计让 Redis 能在<strong>不改变 API</strong> 的前提下针对不同数据量优化内存和性能。</p>
+</div>
+
+<h4>对象共享与引用计数</h4>
+
+<p>Redis 启动时会预创建 <strong>0~9999</strong> 的整数对象池（shared.integers），所有用到这些整数值的 key 都共享同一个 redisObject，通过 refcount 计数管理生命周期。这就是为什么小整数值的 key 内存开销更小。</p>
+
+<pre data-lang="redis"><code># 验证对象共享
+127.0.0.1:6379> SET a 100
+127.0.0.1:6379> SET b 100
+127.0.0.1:6379> OBJECT REFCOUNT a
+(integer) 2147483647    # 共享对象的refcount为INT_MAX（Redis 4.0+不再真正计数）
+127.0.0.1:6379> OBJECT ENCODING a
+"int"                   # 整数编码
+
+127.0.0.1:6379> SET c 10001
+127.0.0.1:6379> OBJECT REFCOUNT c
+(integer) 1             # 超出共享范围，独立对象</code></pre>
+
+<div class="callout antirez">
+<p>为什么共享池只到 9999？因为判断两个对象是否相同需要比较值——对于整数，比较是 O(1)；但如果扩展到字符串，就是 O(n) 比较，CPU 开销反而大于内存节省。所以只共享整数且限制范围。这个范围可通过 <code>REDIS_SHARED_INTEGERS</code> 编译时修改，但一般不需要。</p>
+</div>
+
+<h4>五大数据类型与底层编码</h4>
 
 <p>Redis 对外暴露 5 种（加上 Stream 是 6 种）数据类型，但每种类型的底层实现会根据数据量自动切换编码，以在<strong>小数据量时省内存，大数据量时保性能</strong>。这是 Redis 内存效率的核心秘密。</p>
 
@@ -632,11 +672,11 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
     <tr>
       <td rowspan="2"><strong>List</strong></td>
       <td>listpack (旧版ziplist)</td>
-      <td>元素数 ≤ 128 且每个元素 ≤ 64字节</td>
+      <td>listpack总字节数 ≤ 8KB (list-max-listpack-size=-2)</td>
     </tr>
     <tr>
       <td>quicklist</td>
-      <td>超出上述条件</td>
+      <td>超出字节数限制</td>
     </tr>
     <tr>
       <td rowspan="2"><strong>Hash</strong></td>
@@ -689,6 +729,236 @@ jemalloc 一次分配 64 字节 → 64 - 20 = 44 字节可用于数据</code></p
 <p>我对编码切换的设计哲学是：<strong>让小对象极度紧凑，让大对象保持高效</strong>。ziplist/listpack 在元素少时内存连续、cache 友好，但一旦元素多了，每次插入都要 O(n) 搬移数据就不可接受了。所以需要一个触发点去切换到更适合的结构。这个阈值不是拍脑袋——是根据 CPU cache line (64B) 和 jemalloc 分配策略反推出来的。</p>
 </div>
 
+<h4>每种数据类型的使用场景与面试问答</h4>
+
+<p>面试官通常不只问"有哪些数据类型"，更会追问"什么场景用什么类型"以及"底层为什么这么设计"。以下按类型逐一展开：</p>
+
+<h5>String 类型</h5>
+
+<table>
+  <thead>
+    <tr>
+      <th>使用场景</th>
+      <th>命令示例</th>
+      <th>设计要点</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>缓存对象（JSON）</td>
+      <td><code>SET user:1001 "{...}" EX 3600</code></td>
+      <td>简单直接，配合 TTL 控制过期</td>
+    </tr>
+    <tr>
+      <td>计数器（PV/UV/点赞）</td>
+      <td><code>INCR article:1001:pv</code></td>
+      <td>原子递增，天然线程安全</td>
+    </tr>
+    <tr>
+      <td>分布式锁</td>
+      <td><code>SET lock:order NX PX 30000</code></td>
+      <td>NX保证互斥，PX防死锁</td>
+    </tr>
+    <tr>
+      <td>分布式 Session</td>
+      <td><code>SET session:token "{user}" EX 1800</code></td>
+      <td>跨实例共享会话状态</td>
+    </tr>
+    <tr>
+      <td>位图操作</td>
+      <td><code>SETBIT sign:uid:202401 5 1</code></td>
+      <td>签到、布隆过滤器底层</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout tip">
+<p><strong>面试题：String 的三种编码什么时候转换？</strong><br>
+1. <strong>int</strong> → 值是整数且在 long 范围内时使用。执行 APPEND/SETRANGE 等操作后会变为 raw<br>
+2. <strong>embstr</strong> → 字符串 ≤ 44字节。注意 embstr 是<strong>只读的</strong>——任何修改操作（如 APPEND）都会先转为 raw 再执行，即使修改后仍然 ≤ 44字节也不会变回 embstr<br>
+3. <strong>raw</strong> → 字符串 > 44字节，或者 embstr 被修改后</p>
+</div>
+
+<h5>Hash 类型</h5>
+
+<table>
+  <thead>
+    <tr>
+      <th>使用场景</th>
+      <th>命令示例</th>
+      <th>设计要点</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>对象属性存储</td>
+      <td><code>HSET user:1001 name "Tom" age 25</code></td>
+      <td>比 String 存 JSON 更灵活，可单独读写字段</td>
+    </tr>
+    <tr>
+      <td>购物车</td>
+      <td><code>HINCRBY cart:uid product:sku 1</code></td>
+      <td>field=商品ID，value=数量</td>
+    </tr>
+    <tr>
+      <td>计数器组</td>
+      <td><code>HINCRBY stats:page views 1</code></td>
+      <td>同一实体的多个计数器聚合</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout tip">
+<p><strong>面试题：Hash 存对象 vs String 存 JSON，怎么选？</strong><br>
+- <strong>Hash</strong>：需要频繁读写单个字段时（如更新用户昵称，不需要拉取整个对象）。缺点：不能设置单个 field 的 TTL<br>
+- <strong>String+JSON</strong>：整体读写为主（如缓存一个完整的接口响应）。缺点：修改单字段需要读取-修改-回写整个 JSON<br>
+- <strong>选型结论</strong>：字段数少且需要部分读写 → Hash；整体缓存且结构复杂 → String+JSON<br>
+- <strong>内存对比</strong>：当 Hash 使用 listpack 编码时（field数 ≤ 128），内存比等量的多个 String key 更省（因为省掉了每个 key 的 dictEntry + redisObject 开销，约 70字节/key）</p>
+</div>
+
+<h5>List 类型</h5>
+
+<table>
+  <thead>
+    <tr>
+      <th>使用场景</th>
+      <th>命令示例</th>
+      <th>设计要点</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>消息队列（简易版）</td>
+      <td><code>LPUSH queue msg</code> + <code>BRPOP queue 0</code></td>
+      <td>BRPOP 阻塞等待，减少轮询</td>
+    </tr>
+    <tr>
+      <td>最新动态/时间线</td>
+      <td><code>LPUSH feed:uid msg_id</code> + <code>LRANGE 0 19</code></td>
+      <td>LPUSH+LTRIM 维护固定长度</td>
+    </tr>
+    <tr>
+      <td>栈/队列</td>
+      <td>LPUSH+LPOP=栈，LPUSH+RPOP=队列</td>
+      <td>双端操作灵活</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+<p><strong>面试题：Redis List 做消息队列的缺陷？</strong><br>
+1. 没有 ACK 机制——消费者取走消息后宕机，消息就丢了<br>
+2. 不支持消费者组——多个消费者无法独立消费同一条消息<br>
+3. 没有消息持久化保证——依赖 Redis 本身的持久化机制<br>
+<strong>替代方案</strong>：Redis 5.0+ 的 <strong>Stream</strong> 类型支持消费者组、ACK、消息ID，是 Redis 原生的可靠消息队列方案。但生产级场景仍建议用专业 MQ（RocketMQ/Kafka）。</p>
+</div>
+
+<h5>Set 类型</h5>
+
+<table>
+  <thead>
+    <tr>
+      <th>使用场景</th>
+      <th>命令示例</th>
+      <th>设计要点</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>标签/好友关系</td>
+      <td><code>SADD user:1001:tags "java" "redis"</code></td>
+      <td>自动去重</td>
+    </tr>
+    <tr>
+      <td>共同好友</td>
+      <td><code>SINTER user:A:friends user:B:friends</code></td>
+      <td>集合交集运算</td>
+    </tr>
+    <tr>
+      <td>抽奖</td>
+      <td><code>SRANDMEMBER lottery 3</code></td>
+      <td>随机返回N个不重复元素</td>
+    </tr>
+    <tr>
+      <td>UV 去重统计</td>
+      <td><code>SADD page:uv:20240101 uid</code></td>
+      <td>SCARD获取UV数</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout tip">
+<p><strong>面试题：Set 的 intset 编码什么时候生效？</strong><br>
+当且仅当集合中<strong>全部为整数</strong>且元素数 ≤ 512（<code>set-max-intset-entries</code>）时使用 intset。intset 是有序整数数组，用二分查找 O(log n)，内存极其紧凑（无指针，连续存储）。任何一个非整数元素加入都会立即转为 hashtable 编码（不可逆）。</p>
+</div>
+
+<h5>ZSet（Sorted Set）类型</h5>
+
+<table>
+  <thead>
+    <tr>
+      <th>使用场景</th>
+      <th>命令示例</th>
+      <th>设计要点</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>排行榜</td>
+      <td><code>ZINCRBY rank:game uid 10</code> + <code>ZREVRANGE rank:game 0 9 WITHSCORES</code></td>
+      <td>按 score 排序，ZREVRANGE 取 Top N</td>
+    </tr>
+    <tr>
+      <td>延迟队列</td>
+      <td><code>ZADD delay_queue &lt;timestamp&gt; task_id</code></td>
+      <td>score=执行时间戳，定时 ZRANGEBYSCORE 取到期任务</td>
+    </tr>
+    <tr>
+      <td>滑动窗口限流</td>
+      <td><code>ZADD rate:uid &lt;now&gt; &lt;req_id&gt;</code></td>
+      <td>ZREMRANGEBYSCORE 删旧 + ZCARD 计数</td>
+    </tr>
+    <tr>
+      <td>带权重的标签/搜索</td>
+      <td><code>ZADD search:hot &lt;score&gt; "keyword"</code></td>
+      <td>热搜按热度排序</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout tip">
+<p><strong>面试题：ZSet 为什么同时用跳表和哈希表？</strong><br>
+ZSet 在数据量大时底层是 <strong>skiplist + hashtable</strong> 的组合：<br>
+- <strong>skiplist</strong> 提供有序性：支持范围查询（ZRANGEBYSCORE）、排名查询（ZRANK）等 O(log n) 操作<br>
+- <strong>hashtable</strong> 提供快速定位：单个元素的 ZSCORE 查询为 O(1)，不需要遍历跳表<br>
+两者共享元素的 SDS 指针（不重复存储数据），内存开销是"额外一个哈希表的指针"换来"O(1) 的点查"——这在排行榜场景中非常值得（既要按分数排序又要快速查单人分数）。</p>
+</div>
+
+<h4>编码转换的关键配置参数</h4>
+
+<p>面试中如果能准确说出控制编码转换的配置项，会体现你对 Redis 调优的理解：</p>
+
+<pre data-lang="redis"><code># redis.conf 中控制编码切换阈值的配置
+# Hash: listpack → hashtable
+hash-max-listpack-entries 128    # field数量上限（旧版叫 hash-max-ziplist-entries）
+hash-max-listpack-value 64       # 单个value字节数上限
+
+# List: 单个listpack节点大小（quicklist内部）
+list-max-listpack-size -2        # -2表示每个节点最大8KB
+
+# ZSet: listpack → skiplist+hashtable
+zset-max-listpack-entries 128    # 元素数量上限
+zset-max-listpack-value 64       # 单个元素字节数上限
+
+# Set: intset → hashtable
+set-max-intset-entries 512       # 整数集合最大元素数
+
+# 面试追问："你在生产环境调过这些参数吗？"
+# 答：通常不需要调。除非特殊场景——如 Hash 的 field 都很短但数量可能到 256，
+# 可以适当调大 hash-max-listpack-entries 到 256 来继续使用紧凑编码省内存。
+# 但要注意：listpack 的 CRUD 是 O(n)，entries 太大会影响写性能。</code></pre>
+
+<div id="ch2-2b"></div>
 <h4>渐进式 Rehash（Hash 类型高频考点）</h4>
 
 <p>Redis 的 Hash 类型底层用 <strong>dict</strong>（哈希表）存储。当负载因子（used/size）过高或过低时需要扩容/缩容。但一个百万级 key 的 dict 做 rehash，如果一次性完成，会阻塞主线程数秒。Redis 的解决方案：<strong>渐进式 rehash</strong>。</p>
@@ -758,7 +1028,7 @@ jemalloc 一次分配 64 字节 → 64 - 20 = 44 字节可用于数据</code></p
 
 <h4>跳跃表原理</h4>
 
-<p>跳跃表本质是<strong>多层有序链表</strong>。底层包含所有元素，每往上一层随机"提拔"约一半节点作为索引，查找时从最高层开始，逐层缩小范围——实现 O(log n) 的查找、插入、删除。</p>
+<p>跳跃表本质是<strong>多层有序链表</strong>。底层包含所有元素，每往上一层以概率 p 随机"提拔"节点作为索引（Redis 中 p=0.25，即约四分之一的节点被提升到上一层），查找时从最高层开始，逐层缩小范围——实现 O(log n) 的查找、插入、删除。</p>
 
 <div class="diagram">
 <svg width="700" height="240" viewBox="0 0 700 240" xmlns="http://www.w3.org/2000/svg">
@@ -1196,9 +1466,9 @@ aof-use-rdb-preamble yes         # 混合持久化
 auto-aof-rewrite-percentage 100  # AOF体积翻倍时触发重写
 auto-aof-rewrite-min-size 64mb   # AOF最小64MB才触发重写
 
-# 同时保留RDB快照（用于备份/主从同步）
-save 900 1
-save 300 10
+# 同时保留RDB快照（用于备份/主从同步）— Redis 7.0 默认值
+save 3600 1
+save 300 100
 save 60 10000</code></pre>
 
 <table>
@@ -1384,9 +1654,302 @@ save 60 10000</code></pre>
 </div>
 
 <div id="ch4-3">
-<h3>4.3 近似 LRU vs LFU 实现原理</h3>
+<h3>4.3 LRU 与 LFU 算法原理（概念详解）</h3>
 
-<h4>为什么是"近似"LRU？</h4>
+<p>在讨论 Redis 的近似实现之前，先彻底搞清楚 LRU 和 LFU 这两个经典淘汰算法的<strong>通用概念</strong>——这是面试的基础考点，也是理解 Redis 实现的前提。</p>
+
+<h4>LRU（Least Recently Used，最近最少使用）</h4>
+
+<p><strong>核心思想</strong>：淘汰最久没有被访问的数据。基于"时间局部性"假设——如果一个数据最近被访问过，那它在近期再次被访问的概率更高。</p>
+
+<h5>经典实现：HashMap + 双向链表</h5>
+
+<p>这是 LeetCode 146 题的标准解法，也是面试手撕代码的高频题：</p>
+
+<div class="diagram">
+<svg width="680" height="200" viewBox="0 0 680 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- HashMap -->
+  <rect x="30" y="20" width="150" height="160" rx="6" fill="rgba(88,166,255,0.08)" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="105" y="15" fill="#58a6ff" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">HashMap&lt;Key, Node&gt;</text>
+  <rect x="45" y="35" width="120" height="22" rx="3" fill="#1c2128" stroke="#30363d" stroke-width="1"/>
+  <text x="105" y="50" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">key1 → node1</text>
+  <rect x="45" y="62" width="120" height="22" rx="3" fill="#1c2128" stroke="#30363d" stroke-width="1"/>
+  <text x="105" y="77" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">key2 → node2</text>
+  <rect x="45" y="89" width="120" height="22" rx="3" fill="#1c2128" stroke="#30363d" stroke-width="1"/>
+  <text x="105" y="104" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">key3 → node3</text>
+  <rect x="45" y="116" width="120" height="22" rx="3" fill="#1c2128" stroke="#30363d" stroke-width="1"/>
+  <text x="105" y="131" fill="#8b949e" font-size="9" text-anchor="middle" font-family="monospace">...</text>
+  <text x="105" y="165" fill="#8b949e" font-size="9" text-anchor="middle" font-family="monospace">O(1) 定位节点</text>
+
+  <!-- Arrow -->
+  <line x1="180" y1="100" x2="220" y2="100" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrGrayLRU)"/>
+
+  <!-- Doubly Linked List -->
+  <rect x="220" y="20" width="430" height="160" rx="6" fill="rgba(63,185,80,0.08)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="435" y="15" fill="#3fb950" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">双向链表（按访问时间排序）</text>
+
+  <!-- HEAD -->
+  <rect x="240" y="75" width="55" height="45" rx="4" fill="#1c2128" stroke="#6e7681" stroke-width="1"/>
+  <text x="267" y="95" fill="#6e7681" font-size="9" text-anchor="middle" font-family="monospace">HEAD</text>
+  <text x="267" y="110" fill="#6e7681" font-size="8" text-anchor="middle" font-family="monospace">(dummy)</text>
+
+  <!-- Most recent -->
+  <rect x="315" y="75" width="75" height="45" rx="4" fill="#1c2128" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="352" y="93" fill="#3fb950" font-size="9" text-anchor="middle" font-family="monospace">node3</text>
+  <text x="352" y="110" fill="#8b949e" font-size="8" text-anchor="middle" font-family="monospace">最近访问</text>
+
+  <rect x="410" y="75" width="75" height="45" rx="4" fill="#1c2128" stroke="#d29922" stroke-width="1"/>
+  <text x="447" y="93" fill="#d29922" font-size="9" text-anchor="middle" font-family="monospace">node1</text>
+  <text x="447" y="110" fill="#8b949e" font-size="8" text-anchor="middle" font-family="monospace">较早访问</text>
+
+  <!-- Least recent -->
+  <rect x="505" y="75" width="75" height="45" rx="4" fill="#1c2128" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="542" y="93" fill="#dc3545" font-size="9" text-anchor="middle" font-family="monospace">node2</text>
+  <text x="542" y="110" fill="#dc3545" font-size="8" text-anchor="middle" font-family="monospace">最久未访问</text>
+
+  <!-- TAIL -->
+  <rect x="600" y="75" width="40" height="45" rx="4" fill="#1c2128" stroke="#6e7681" stroke-width="1"/>
+  <text x="620" y="95" fill="#6e7681" font-size="9" text-anchor="middle" font-family="monospace">TAIL</text>
+  <text x="620" y="110" fill="#6e7681" font-size="8" text-anchor="middle" font-family="monospace">(dummy)</text>
+
+  <!-- Arrows between nodes -->
+  <line x1="295" y1="92" x2="315" y2="92" stroke="#8b949e" stroke-width="1"/>
+  <line x1="390" y1="92" x2="410" y2="92" stroke="#8b949e" stroke-width="1"/>
+  <line x1="485" y1="92" x2="505" y2="92" stroke="#8b949e" stroke-width="1"/>
+  <line x1="580" y1="92" x2="600" y2="92" stroke="#8b949e" stroke-width="1"/>
+
+  <!-- Labels -->
+  <text x="352" y="140" fill="#3fb950" font-size="9" text-anchor="middle" font-family="monospace">← 新访问移到头部</text>
+  <text x="560" y="140" fill="#dc3545" font-size="9" text-anchor="middle" font-family="monospace">淘汰尾部 →</text>
+
+  <!-- Complexity -->
+  <text x="435" y="170" fill="#8b949e" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">GET/PUT/淘汰 均为 O(1) — 因为 HashMap 定位 + 链表移动都是常数时间</text>
+
+  <defs>
+    <marker id="arrGrayLRU" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#8b949e"/></marker>
+  </defs>
+</svg>
+<div class="diagram-caption">图：经典 LRU 实现 — HashMap 提供 O(1) 查找，双向链表维护访问顺序</div>
+</div>
+
+<pre data-lang="java"><code>// LRU Cache 核心实现（面试手撕版）
+public class LRUCache&lt;K, V&gt; {
+    private final int capacity;
+    private final Map&lt;K, Node&lt;K, V&gt;&gt; map;
+    private final Node&lt;K, V&gt; head, tail; // 哨兵节点
+
+    public LRUCache(int capacity) {
+        this.capacity = capacity;
+        this.map = new HashMap&lt;&gt;();
+        head = new Node&lt;&gt;(null, null);
+        tail = new Node&lt;&gt;(null, null);
+        head.next = tail;
+        tail.prev = head;
+    }
+
+    public V get(K key) {
+        Node&lt;K, V&gt; node = map.get(key);
+        if (node == null) return null;
+        moveToHead(node);  // 访问后移到链表头部（最近使用）
+        return node.value;
+    }
+
+    public void put(K key, V value) {
+        Node&lt;K, V&gt; node = map.get(key);
+        if (node != null) {
+            node.value = value;
+            moveToHead(node);
+        } else {
+            node = new Node&lt;&gt;(key, value);
+            map.put(key, node);
+            addToHead(node);
+            if (map.size() &gt; capacity) {
+                Node&lt;K, V&gt; removed = removeTail(); // 淘汰最久未使用
+                map.remove(removed.key);
+            }
+        }
+    }
+
+    // moveToHead / addToHead / removeTail: 双向链表的O(1)操作
+}</code></pre>
+
+<div class="callout tip">
+<p><strong>面试追问：Java 中的 LinkedHashMap 和 LRU 的关系？</strong><br>
+<code>LinkedHashMap(capacity, 0.75f, true)</code> 第三个参数 <code>accessOrder=true</code> 时，内部就是按访问顺序排序的双向链表。重写 <code>removeEldestEntry()</code> 方法即可实现 LRU：<br>
+<code>protected boolean removeEldestEntry(Map.Entry eldest) { return size() > capacity; }</code><br>
+但这个实现<strong>不是线程安全</strong>的。生产环境建议用 Caffeine 或手动加锁。</p>
+</div>
+
+<h5>LRU 的缺陷</h5>
+
+<ul>
+  <li><strong>缓存污染</strong>：一次批量扫描（如全表查询、运维操作）会把大量冷数据"刷"到链表头部，把真正的热数据挤出去。这就是"最近被访问 ≠ 未来会被访问"</li>
+  <li><strong>无法区分频率</strong>：一个被访问了 1000 次的热 key 和一个刚被访问 1 次的冷 key，如果后者更新，LRU 会先淘汰前者</li>
+  <li><strong>空间开销</strong>：每个节点需要 prev + next 两个指针（16 字节），在百万级 key 场景下开销显著</li>
+</ul>
+
+<h4>LFU（Least Frequently Used，最不经常使用）</h4>
+
+<p><strong>核心思想</strong>：淘汰访问频率最低的数据。基于"频率局部性"假设——被访问次数多的数据，未来被访问的概率也更高。</p>
+
+<h5>经典实现：HashMap + 频率桶双向链表</h5>
+
+<div class="diagram">
+<svg width="680" height="220" viewBox="0 0 680 220" xmlns="http://www.w3.org/2000/svg">
+  <!-- Frequency buckets -->
+  <text x="340" y="15" fill="#a371f7" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">LFU: 按频率分桶，同频率内按时间排序</text>
+
+  <!-- Freq 1 bucket -->
+  <rect x="50" y="40" width="180" height="80" rx="6" fill="rgba(220,53,69,0.08)" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="140" y="58" fill="#dc3545" font-size="10" text-anchor="middle" font-family="monospace" font-weight="bold">频率 = 1（最低）</text>
+  <rect x="65" y="68" width="55" height="35" rx="3" fill="#1c2128" stroke="#dc3545" stroke-width="1"/>
+  <text x="92" y="90" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">key_D</text>
+  <rect x="130" y="68" width="55" height="35" rx="3" fill="#1c2128" stroke="#dc3545" stroke-width="1"/>
+  <text x="157" y="90" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">key_E</text>
+  <text x="140" y="115" fill="#dc3545" font-size="8" text-anchor="middle" font-family="monospace">← 优先淘汰这里的尾部</text>
+
+  <!-- Freq 3 bucket -->
+  <rect x="260" y="40" width="180" height="80" rx="6" fill="rgba(210,153,34,0.08)" stroke="#d29922" stroke-width="1.5"/>
+  <text x="350" y="58" fill="#d29922" font-size="10" text-anchor="middle" font-family="monospace" font-weight="bold">频率 = 3</text>
+  <rect x="275" y="68" width="55" height="35" rx="3" fill="#1c2128" stroke="#d29922" stroke-width="1"/>
+  <text x="302" y="90" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">key_B</text>
+  <rect x="340" y="68" width="55" height="35" rx="3" fill="#1c2128" stroke="#d29922" stroke-width="1"/>
+  <text x="367" y="90" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">key_C</text>
+
+  <!-- Freq 10 bucket -->
+  <rect x="470" y="40" width="160" height="80" rx="6" fill="rgba(63,185,80,0.08)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="550" y="58" fill="#3fb950" font-size="10" text-anchor="middle" font-family="monospace" font-weight="bold">频率 = 10（热点）</text>
+  <rect x="485" y="68" width="55" height="35" rx="3" fill="#1c2128" stroke="#3fb950" stroke-width="1"/>
+  <text x="512" y="90" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">key_A</text>
+
+  <!-- minFreq pointer -->
+  <line x1="140" y1="135" x2="140" y2="150" stroke="#dc3545" stroke-width="2" marker-end="url(#arrRedLFU)"/>
+  <text x="140" y="165" fill="#dc3545" font-size="9" text-anchor="middle" font-family="monospace">minFreq = 1</text>
+
+  <!-- Operations explanation -->
+  <rect x="50" y="175" width="580" height="35" rx="4" fill="rgba(88,166,255,0.05)" stroke="#58a6ff" stroke-width="1"/>
+  <text x="340" y="195" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="SF Pro Display, sans-serif">访问 key_D → freq 从1变2 → 移到freq=2桶 | 淘汰时 → 删除 minFreq 桶的尾部节点</text>
+
+  <defs>
+    <marker id="arrRedLFU" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#dc3545"/></marker>
+  </defs>
+</svg>
+<div class="diagram-caption">图：经典 LFU 实现 — 维护 minFreq 指针，淘汰最低频率桶中最旧的元素</div>
+</div>
+
+<pre data-lang="java"><code>// LFU Cache 核心数据结构（LeetCode 460）
+public class LFUCache&lt;K, V&gt; {
+    private final int capacity;
+    private int minFreq;  // 当前最小频率（淘汰时直接定位）
+    private final Map&lt;K, Node&lt;K, V&gt;&gt; keyMap;           // key → node
+    private final Map&lt;Integer, LinkedList&lt;Node&gt;&gt; freqMap; // freq → 该频率的节点链表
+
+    public V get(K key) {
+        Node&lt;K, V&gt; node = keyMap.get(key);
+        if (node == null) return null;
+        increaseFreq(node);  // 频率+1，从旧桶移到新桶
+        return node.value;
+    }
+
+    public void put(K key, V value) {
+        if (keyMap.containsKey(key)) {
+            Node&lt;K, V&gt; node = keyMap.get(key);
+            node.value = value;
+            increaseFreq(node);
+        } else {
+            if (keyMap.size() &gt;= capacity) {
+                // 淘汰：minFreq桶中最旧的节点（链表尾部）
+                LinkedList&lt;Node&gt; minList = freqMap.get(minFreq);
+                Node&lt;K, V&gt; removed = minList.removeLast();
+                keyMap.remove(removed.key);
+            }
+            Node&lt;K, V&gt; newNode = new Node&lt;&gt;(key, value, 1);
+            keyMap.put(key, newNode);
+            freqMap.computeIfAbsent(1, k -&gt; new LinkedList&lt;&gt;()).addFirst(newNode);
+            minFreq = 1;  // 新插入节点频率为1，minFreq重置
+        }
+    }
+
+    private void increaseFreq(Node&lt;K, V&gt; node) {
+        int oldFreq = node.freq;
+        freqMap.get(oldFreq).remove(node);
+        if (freqMap.get(oldFreq).isEmpty()) {
+            freqMap.remove(oldFreq);
+            if (minFreq == oldFreq) minFreq++;  // 更新最小频率
+        }
+        node.freq++;
+        freqMap.computeIfAbsent(node.freq, k -&gt; new LinkedList&lt;&gt;()).addFirst(node);
+    }
+}</code></pre>
+
+<h5>LFU 的缺陷</h5>
+
+<ul>
+  <li><strong>历史热点无法清除</strong>：早期被大量访问的数据（如过期的爆款商品），即使后来再也没人访问，频率值仍然很高，长期霸占缓存</li>
+  <li><strong>新数据冷启动问题</strong>：新加入的数据频率为 1，容易被立即淘汰，无法积累足够的访问次数</li>
+  <li><strong>实现复杂度</strong>：比 LRU 复杂得多，需要维护频率桶结构</li>
+</ul>
+
+<h4>LRU vs LFU 核心对比</h4>
+
+<table>
+  <thead>
+    <tr>
+      <th>对比维度</th>
+      <th>LRU</th>
+      <th>LFU</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>淘汰依据</td>
+      <td><strong>时间</strong>（最久未访问）</td>
+      <td><strong>频率</strong>（访问次数最少）</td>
+    </tr>
+    <tr>
+      <td>适用场景</td>
+      <td>访问模式变化快、无明显冷热区分</td>
+      <td>有明显的热点数据、访问模式稳定</td>
+    </tr>
+    <tr>
+      <td>缓存污染</td>
+      <td><strong>易受影响</strong>（一次扫描冲刷）</td>
+      <td>抗污染能力强</td>
+    </tr>
+    <tr>
+      <td>对突发流量</td>
+      <td>响应快（新热点立即到头部）</td>
+      <td><strong>响应慢</strong>（需要积累频率）</td>
+    </tr>
+    <tr>
+      <td>历史数据处理</td>
+      <td>自然淘汰（只看最近一次访问时间）</td>
+      <td><strong>需要衰减机制</strong>，否则历史热点永驻</td>
+    </tr>
+    <tr>
+      <td>实现复杂度</td>
+      <td>低（HashMap + 链表）</td>
+      <td>中（HashMap + 频率桶链表）</td>
+    </tr>
+    <tr>
+      <td>空间开销</td>
+      <td>每节点2指针（16字节）</td>
+      <td>每节点2指针 + freq字段</td>
+    </tr>
+    <tr>
+      <td>典型应用</td>
+      <td>OS 页面置换、MySQL Buffer Pool、Redis 默认策略</td>
+      <td>CDN 缓存、Redis 4.0+ 可选策略、Caffeine(W-TinyLFU)</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout tip">
+<p><strong>面试总结回答模板</strong>：<br>
+"LRU 根据时间淘汰，实现简单但容易被批量扫描污染；LFU 根据频率淘汰，抗污染能力强但对突发热点响应慢且存在历史热点问题。Redis 的做法是结合两者优势——默认用近似 LRU（空间省、效果好），4.0+ 可选 LFU 并加入<strong>概率递增 + 时间衰减</strong>来解决 LFU 的经典缺陷。实际选型看业务：通用场景用 allkeys-lru，有稳定热点用 allkeys-lfu。"</p>
+</div>
+
+<h4>Redis 的近似 LRU 实现</h4>
 
 <p>精确 LRU 需要维护一个全局双向链表（像 LinkedHashMap），每次访问都移动节点。对于 Redis 数百万 key 来说，这个开销不可接受——<strong>每个节点两个指针 = 16 字节/key</strong>，而且链表操作对 cache line 不友好。</p>
 
