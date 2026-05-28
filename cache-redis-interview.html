@@ -609,6 +609,78 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
 
 <h4>redisObject 结构（面试高频考点）</h4>
 
+<div class="diagram">
+<svg width="700" height="200" viewBox="0 0 700 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Title -->
+  <text x="350" y="18" fill="#8b949e" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif">redisObject 内存布局（共 16 字节 = 128 bit）</text>
+
+  <!-- First 32 bits: type(4) + encoding(4) + lru(24) -->
+  <rect x="30" y="35" width="50" height="50" rx="4" fill="rgba(220,53,69,0.15)" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="55" y="55" fill="#dc3545" font-size="9" text-anchor="middle" font-family="monospace">type</text>
+  <text x="55" y="73" fill="#e6edf3" font-size="11" text-anchor="middle" font-family="monospace" font-weight="bold">4bit</text>
+
+  <rect x="85" y="35" width="55" height="50" rx="4" fill="rgba(163,113,247,0.15)" stroke="#a371f7" stroke-width="1.5"/>
+  <text x="112" y="55" fill="#a371f7" font-size="9" text-anchor="middle" font-family="monospace">encoding</text>
+  <text x="112" y="73" fill="#e6edf3" font-size="11" text-anchor="middle" font-family="monospace" font-weight="bold">4bit</text>
+
+  <rect x="145" y="35" width="145" height="50" rx="4" fill="rgba(210,153,34,0.15)" stroke="#d29922" stroke-width="1.5"/>
+  <text x="217" y="55" fill="#d29922" font-size="9" text-anchor="middle" font-family="monospace">lru / lfu</text>
+  <text x="217" y="73" fill="#e6edf3" font-size="11" text-anchor="middle" font-family="monospace" font-weight="bold">24bit</text>
+
+  <!-- Second 32 bits: refcount -->
+  <rect x="300" y="35" width="130" height="50" rx="4" fill="rgba(63,185,80,0.15)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="365" y="55" fill="#3fb950" font-size="9" text-anchor="middle" font-family="monospace">refcount</text>
+  <text x="365" y="73" fill="#e6edf3" font-size="11" text-anchor="middle" font-family="monospace" font-weight="bold">32bit (4字节)</text>
+
+  <!-- Third 64 bits: ptr -->
+  <rect x="440" y="35" width="230" height="50" rx="4" fill="rgba(88,166,255,0.15)" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="555" y="55" fill="#58a6ff" font-size="9" text-anchor="middle" font-family="monospace">*ptr (指向底层数据结构)</text>
+  <text x="555" y="73" fill="#e6edf3" font-size="11" text-anchor="middle" font-family="monospace" font-weight="bold">64bit (8字节)</text>
+
+  <!-- Byte markers -->
+  <text x="160" y="100" fill="#6e7681" font-size="9" text-anchor="middle" font-family="monospace">← 4字节 →</text>
+  <text x="365" y="100" fill="#6e7681" font-size="9" text-anchor="middle" font-family="monospace">← 4字节 →</text>
+  <text x="555" y="100" fill="#6e7681" font-size="9" text-anchor="middle" font-family="monospace">← 8字节 →</text>
+
+  <!-- ptr arrow to actual data -->
+  <line x1="555" y1="85" x2="555" y2="120" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrBlueRObj)"/>
+
+  <!-- Actual data structures -->
+  <rect x="420" y="125" width="80" height="30" rx="4" fill="#1c2128" stroke="#58a6ff" stroke-width="1"/>
+  <text x="460" y="144" fill="#58a6ff" font-size="9" text-anchor="middle" font-family="monospace">SDS</text>
+
+  <rect x="510" y="125" width="80" height="30" rx="4" fill="#1c2128" stroke="#3fb950" stroke-width="1"/>
+  <text x="550" y="144" fill="#3fb950" font-size="9" text-anchor="middle" font-family="monospace">skiplist</text>
+
+  <rect x="600" y="125" width="80" height="30" rx="4" fill="#1c2128" stroke="#d29922" stroke-width="1"/>
+  <text x="640" y="144" fill="#d29922" font-size="9" text-anchor="middle" font-family="monospace">dict</text>
+
+  <!-- type possible values -->
+  <text x="55" y="115" fill="#dc3545" font-size="8" text-anchor="middle" font-family="monospace">STRING=0</text>
+  <text x="55" y="127" fill="#dc3545" font-size="8" text-anchor="middle" font-family="monospace">LIST=1</text>
+  <text x="55" y="139" fill="#dc3545" font-size="8" text-anchor="middle" font-family="monospace">SET=2</text>
+  <text x="55" y="151" fill="#dc3545" font-size="8" text-anchor="middle" font-family="monospace">ZSET=3</text>
+  <text x="55" y="163" fill="#dc3545" font-size="8" text-anchor="middle" font-family="monospace">HASH=4</text>
+
+  <!-- encoding possible values -->
+  <text x="145" y="115" fill="#a371f7" font-size="8" text-anchor="middle" font-family="monospace">int=1</text>
+  <text x="145" y="127" fill="#a371f7" font-size="8" text-anchor="middle" font-family="monospace">embstr=8</text>
+  <text x="145" y="139" fill="#a371f7" font-size="8" text-anchor="middle" font-family="monospace">raw=0</text>
+  <text x="145" y="151" fill="#a371f7" font-size="8" text-anchor="middle" font-family="monospace">hashtable=2</text>
+  <text x="145" y="163" fill="#a371f7" font-size="8" text-anchor="middle" font-family="monospace">skiplist=7</text>
+  <text x="145" y="175" fill="#a371f7" font-size="8" text-anchor="middle" font-family="monospace">listpack=11</text>
+
+  <!-- lru field explanation -->
+  <text x="270" y="115" fill="#d29922" font-size="8" text-anchor="start" font-family="monospace">LRU模式: 24bit秒级时间戳</text>
+  <text x="270" y="130" fill="#d29922" font-size="8" text-anchor="start" font-family="monospace">LFU模式: 16bit ldt + 8bit counter</text>
+
+  <defs>
+    <marker id="arrBlueRObj" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/></marker>
+  </defs>
+</svg>
+<div class="diagram-caption">图：redisObject 内存布局 — 16字节的对象头，ptr 指向真正的数据结构实现</div>
+</div>
+
 <pre data-lang="c"><code>// 源码：server.h
 typedef struct redisObject {
     unsigned type:4;       // 数据类型（STRING/LIST/HASH/SET/ZSET）— 4bit
@@ -779,6 +851,59 @@ jemalloc 一次分配 64 字节 → 64 - 20 = 44 字节可用于数据</code></p
 3. <strong>raw</strong> → 字符串 > 44字节，或者 embstr 被修改后</p>
 </div>
 
+<div class="diagram">
+<svg width="700" height="250" viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg">
+  <!-- Title -->
+  <text x="350" y="18" fill="#8b949e" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif">String 类型编码转换关系（不可逆转换用实线，条件用虚线标注）</text>
+
+  <!-- int node -->
+  <rect x="80" y="60" width="130" height="55" rx="8" fill="rgba(63,185,80,0.12)" stroke="#3fb950" stroke-width="2"/>
+  <text x="145" y="82" fill="#3fb950" font-size="12" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">int</text>
+  <text x="145" y="100" fill="#8b949e" font-size="9" text-anchor="middle" font-family="monospace">值为整数 ≤ LONG_MAX</text>
+
+  <!-- embstr node -->
+  <rect x="290" y="60" width="130" height="55" rx="8" fill="rgba(210,153,34,0.12)" stroke="#d29922" stroke-width="2"/>
+  <text x="355" y="82" fill="#d29922" font-size="12" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">embstr</text>
+  <text x="355" y="100" fill="#8b949e" font-size="9" text-anchor="middle" font-family="monospace">字符串 ≤ 44字节</text>
+
+  <!-- raw node -->
+  <rect x="500" y="60" width="130" height="55" rx="8" fill="rgba(220,53,69,0.12)" stroke="#dc3545" stroke-width="2"/>
+  <text x="565" y="82" fill="#dc3545" font-size="12" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">raw</text>
+  <text x="565" y="100" fill="#8b949e" font-size="9" text-anchor="middle" font-family="monospace">字符串 > 44字节</text>
+
+  <!-- int → raw (APPEND/SETRANGE等修改操作) -->
+  <path d="M145 115 Q145 170 500 87" stroke="#dc3545" stroke-width="1.5" fill="none" marker-end="url(#arrRedEnc)"/>
+  <text x="300" y="160" fill="#dc3545" font-size="9" text-anchor="middle" font-family="monospace">APPEND / SETRANGE</text>
+  <text x="300" y="173" fill="#dc3545" font-size="9" text-anchor="middle" font-family="monospace">(任何字符串修改操作)</text>
+
+  <!-- int → embstr (不会发生，直接变raw) -->
+
+  <!-- embstr → raw (任何修改操作) -->
+  <line x1="420" y1="87" x2="500" y2="87" stroke="#dc3545" stroke-width="1.5" marker-end="url(#arrRedEnc)"/>
+  <text x="460" y="80" fill="#dc3545" font-size="9" text-anchor="middle" font-family="monospace">任何修改</text>
+
+  <!-- Cannot go back -->
+  <rect x="220" y="190" width="280" height="40" rx="6" fill="rgba(220,53,69,0.05)" stroke="#dc3545" stroke-width="1" stroke-dasharray="4"/>
+  <text x="360" y="208" fill="#dc3545" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">编码升级不可逆：raw 不会退回 embstr 或 int</text>
+  <text x="360" y="223" fill="#8b949e" font-size="9" text-anchor="middle" font-family="SF Pro Display, sans-serif">（重新 SET 会创建新对象，不算"转回"）</text>
+
+  <!-- Memory comparison -->
+  <rect x="80" y="125" width="130" height="20" rx="3" fill="rgba(63,185,80,0.08)" stroke="none"/>
+  <text x="145" y="139" fill="#3fb950" font-size="8" text-anchor="middle" font-family="monospace">最省内存(无SDS开销)</text>
+
+  <rect x="290" y="125" width="130" height="20" rx="3" fill="rgba(210,153,34,0.08)" stroke="none"/>
+  <text x="355" y="139" fill="#d29922" font-size="8" text-anchor="middle" font-family="monospace">1次malloc,cache友好</text>
+
+  <rect x="500" y="125" width="130" height="20" rx="3" fill="rgba(220,53,69,0.08)" stroke="none"/>
+  <text x="565" y="139" fill="#dc3545" font-size="8" text-anchor="middle" font-family="monospace">2次malloc,有指针跳转</text>
+
+  <defs>
+    <marker id="arrRedEnc" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#dc3545"/></marker>
+  </defs>
+</svg>
+<div class="diagram-caption">图：String 编码转换 — int 和 embstr 在修改后不可逆地转为 raw</div>
+</div>
+
 <h5>Hash 类型</h5>
 
 <table>
@@ -932,6 +1057,81 @@ ZSet 在数据量大时底层是 <strong>skiplist + hashtable</strong> 的组合
 - <strong>skiplist</strong> 提供有序性：支持范围查询（ZRANGEBYSCORE）、排名查询（ZRANK）等 O(log n) 操作<br>
 - <strong>hashtable</strong> 提供快速定位：单个元素的 ZSCORE 查询为 O(1)，不需要遍历跳表<br>
 两者共享元素的 SDS 指针（不重复存储数据），内存开销是"额外一个哈希表的指针"换来"O(1) 的点查"——这在排行榜场景中非常值得（既要按分数排序又要快速查单人分数）。</p>
+</div>
+
+<div class="diagram">
+<svg width="700" height="310" viewBox="0 0 700 310" xmlns="http://www.w3.org/2000/svg">
+  <!-- Title -->
+  <text x="350" y="18" fill="#8b949e" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif">ZSet 大数据量时的双结构：skiplist + hashtable（共享 SDS 指针）</text>
+
+  <!-- Left: skiplist -->
+  <rect x="20" y="30" width="320" height="230" rx="8" fill="rgba(63,185,80,0.05)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="180" y="50" fill="#3fb950" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">skiplist（按 score 有序）</text>
+
+  <!-- Skip list nodes -->
+  <rect x="40" y="65" width="30" height="80" rx="3" fill="#1c2128" stroke="#6e7681" stroke-width="1"/>
+  <text x="55" y="108" fill="#6e7681" font-size="8" text-anchor="middle" font-family="monospace">HEAD</text>
+
+  <rect x="90" y="95" width="65" height="50" rx="3" fill="#1c2128" stroke="#3fb950" stroke-width="1"/>
+  <text x="122" y="114" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">"alice"</text>
+  <text x="122" y="132" fill="#3fb950" font-size="8" text-anchor="middle" font-family="monospace">score:85</text>
+
+  <rect x="170" y="65" width="65" height="80" rx="3" fill="#1c2128" stroke="#3fb950" stroke-width="1"/>
+  <text x="202" y="100" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">"bob"</text>
+  <text x="202" y="118" fill="#3fb950" font-size="8" text-anchor="middle" font-family="monospace">score:92</text>
+
+  <rect x="250" y="95" width="65" height="50" rx="3" fill="#1c2128" stroke="#3fb950" stroke-width="1"/>
+  <text x="282" y="114" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">"carol"</text>
+  <text x="282" y="132" fill="#3fb950" font-size="8" text-anchor="middle" font-family="monospace">score:97</text>
+
+  <!-- Skip list arrows -->
+  <line x1="70" y1="78" x2="170" y2="78" stroke="#3fb950" stroke-width="1" marker-end="url(#arrGnZS)"/>
+  <line x1="70" y1="120" x2="90" y2="120" stroke="#8b949e" stroke-width="1" marker-end="url(#arrGnZS)"/>
+  <line x1="155" y1="120" x2="170" y2="120" stroke="#8b949e" stroke-width="1" marker-end="url(#arrGnZS)"/>
+  <line x1="235" y1="78" x2="250" y2="105" stroke="#3fb950" stroke-width="1" marker-end="url(#arrGnZS)"/>
+  <line x1="235" y1="120" x2="250" y2="120" stroke="#8b949e" stroke-width="1" marker-end="url(#arrGnZS)"/>
+
+  <!-- skiplist capabilities -->
+  <text x="180" y="170" fill="#3fb950" font-size="9" text-anchor="middle" font-family="monospace">ZRANGEBYSCORE → O(log n + m)</text>
+  <text x="180" y="185" fill="#3fb950" font-size="9" text-anchor="middle" font-family="monospace">ZRANK → O(log n)</text>
+  <text x="180" y="200" fill="#3fb950" font-size="9" text-anchor="middle" font-family="monospace">ZADD/ZREM → O(log n)</text>
+
+  <!-- Right: hashtable -->
+  <rect x="370" y="30" width="310" height="230" rx="8" fill="rgba(88,166,255,0.05)" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="525" y="50" fill="#58a6ff" font-size="11" text-anchor="middle" font-family="SF Pro Display, sans-serif" font-weight="bold">hashtable（member → score 映射）</text>
+
+  <!-- Hash table entries -->
+  <rect x="390" y="70" width="130" height="28" rx="3" fill="#1c2128" stroke="#58a6ff" stroke-width="1"/>
+  <text x="455" y="88" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">"alice" → 85.0</text>
+
+  <rect x="390" y="106" width="130" height="28" rx="3" fill="#1c2128" stroke="#58a6ff" stroke-width="1"/>
+  <text x="455" y="124" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">"bob" → 92.0</text>
+
+  <rect x="390" y="142" width="130" height="28" rx="3" fill="#1c2128" stroke="#58a6ff" stroke-width="1"/>
+  <text x="455" y="160" fill="#e6edf3" font-size="9" text-anchor="middle" font-family="monospace">"carol" → 97.0</text>
+
+  <!-- hashtable capabilities -->
+  <text x="525" y="195" fill="#58a6ff" font-size="9" text-anchor="middle" font-family="monospace">ZSCORE member → O(1)</text>
+  <text x="525" y="210" fill="#58a6ff" font-size="9" text-anchor="middle" font-family="monospace">判断member是否存在 → O(1)</text>
+
+  <!-- Shared pointer indicator -->
+  <rect x="540" y="70" width="120" height="100" rx="6" fill="rgba(210,153,34,0.08)" stroke="#d29922" stroke-width="1" stroke-dasharray="4"/>
+  <text x="600" y="90" fill="#d29922" font-size="9" text-anchor="middle" font-family="monospace">共享 SDS</text>
+  <text x="600" y="105" fill="#d29922" font-size="9" text-anchor="middle" font-family="monospace">指针</text>
+  <text x="600" y="125" fill="#8b949e" font-size="8" text-anchor="middle" font-family="monospace">skiplist节点</text>
+  <text x="600" y="138" fill="#8b949e" font-size="8" text-anchor="middle" font-family="monospace">和hashtable的</text>
+  <text x="600" y="151" fill="#8b949e" font-size="8" text-anchor="middle" font-family="monospace">key指向同一</text>
+  <text x="600" y="164" fill="#8b949e" font-size="8" text-anchor="middle" font-family="monospace">SDS对象</text>
+
+  <!-- Bottom summary -->
+  <rect x="20" y="270" width="660" height="30" rx="6" fill="rgba(210,153,34,0.08)" stroke="#d29922" stroke-width="1"/>
+  <text x="350" y="289" fill="#d29922" font-size="10" text-anchor="middle" font-family="SF Pro Display, sans-serif">两种结构同时维护、共享数据指针 — 写入时同时更新两者，读取时根据操作类型选择更优的结构</text>
+
+  <defs>
+    <marker id="arrGnZS" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto"><polygon points="0 0, 6 2.5, 0 5" fill="#3fb950"/></marker>
+  </defs>
+</svg>
+<div class="diagram-caption">图：ZSet 双结构 — skiplist 提供有序范围操作，hashtable 提供 O(1) 点查，共享 SDS 指针不重复存储</div>
 </div>
 
 <h4>编码转换的关键配置参数</h4>
