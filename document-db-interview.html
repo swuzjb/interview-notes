@@ -1,0 +1,1204 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>文档型数据库 · 面试深度指南 — Kleppmann视角</title>
+<link rel="stylesheet" href="./shared/style.css">
+</head>
+<body>
+<div class="reading-progress"></div>
+<button class="theme-toggle" aria-label="切换主题">&#9788;</button>
+<button class="mobile-menu-btn" aria-label="菜单">&#9776;</button>
+<div class="sidebar-overlay"></div>
+
+<div class="page-wrapper">
+
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">Document <span class="accent">DB</span></div>
+    <div class="sidebar-subtitle">MongoDB &amp; ES · Kleppmann 视角</div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-group">
+      <a href="#ch1" class="nav-group-title">一、数据模型与文档结构</a>
+      <div class="nav-items">
+        <a href="#ch1-1">文档模型 vs 关系模型</a>
+        <a href="#ch1-2">MongoDB BSON与Schema设计</a>
+        <a href="#ch1-3">ES文档与Mapping</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#ch2" class="nav-group-title">二、存储引擎</a>
+      <div class="nav-items">
+        <a href="#ch2-1">WiredTiger架构</a>
+        <a href="#ch2-2">Lucene Segment架构</a>
+        <a href="#ch2-3">存储引擎对比</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#ch3" class="nav-group-title">三、索引机制</a>
+      <div class="nav-items">
+        <a href="#ch3-1">MongoDB B-Tree索引</a>
+        <a href="#ch3-2">ES倒排索引原理</a>
+        <a href="#ch3-3">索引优化与面试题</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#ch4" class="nav-group-title">四、分布式架构</a>
+      <div class="nav-items">
+        <a href="#ch4-1">MongoDB副本集</a>
+        <a href="#ch4-2">MongoDB分片策略</a>
+        <a href="#ch4-3">ES集群架构</a>
+        <a href="#ch4-4">一致性模型对比</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#ch5" class="nav-group-title">五、读写流程与性能优化</a>
+      <div class="nav-items">
+        <a href="#ch5-1">MongoDB读写流程</a>
+        <a href="#ch5-2">ES写入与查询流程</a>
+        <a href="#ch5-3">性能特征对比</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#ch6" class="nav-group-title">六、事务与一致性保证</a>
+      <div class="nav-items">
+        <a href="#ch6-1">MongoDB多文档事务</a>
+        <a href="#ch6-2">ES乐观并发控制</a>
+        <a href="#ch6-3">ACID对比</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#ch7" class="nav-group-title">七、场景对比与选型</a>
+      <div class="nav-items">
+        <a href="#ch7-1">选型决策树</a>
+        <a href="#ch7-2">典型架构方案</a>
+        <a href="#ch7-3">面试高频问题</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#ch-new" class="nav-group-title">附：2026新特性</a>
+      <div class="nav-items">
+        <a href="#ch-new">向量搜索(kNN/Atlas)</a>
+        <a href="#ch-new">MongoDB 7.0/8.0</a>
+        <a href="#ch-new">ES 8.x变化</a>
+      </div>
+    </div>
+  </nav>
+</aside>
+
+<main class="main-content">
+
+<div class="page-hero">
+  <h1>文档型数据库面试深度指南</h1>
+  <p class="subtitle">以 Martin Kleppmann (DDIA 作者) 的系统设计视角，深度解构 MongoDB &amp; Elasticsearch</p>
+</div>
+
+<!-- ==================== 第一章 ==================== -->
+<section id="ch1">
+<h2>一、数据模型与文档结构</h2>
+
+<div id="ch1-1">
+<h3>1.1 文档模型 vs 关系模型：根本性差异</h3>
+
+<p>关系模型和文档模型之间的核心分歧，归根结底是一个问题：<strong>数据之间的关联关系，应该由谁来管理？</strong>关系模型说"由数据库来管"，文档模型说"由应用程序来管"。这个选择会深刻影响系统的每一个角落。</p>
+
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>维度</th><th><span class="tag-pulsar">MySQL (关系型)</span></th><th><span class="tag-kafka">MongoDB (文档型)</span></th><th><span class="tag-rocketmq">Elasticsearch</span></th></tr>
+</thead>
+<tbody>
+<tr><td>基本单位</td><td>行 (Row)</td><td>文档 (Document)</td><td>文档 (Document)</td></tr>
+<tr><td>数据格式</td><td>固定Schema的元组</td><td>BSON (Binary JSON)</td><td>JSON</td></tr>
+<tr><td>Schema</td><td>写时强制 (Schema-on-Write)</td><td>读时解释 (Schema-on-Read)</td><td>Mapping定义 (半结构化)</td></tr>
+<tr><td>嵌套数据</td><td>需要JOIN多表</td><td>原生支持嵌套文档/数组</td><td>支持nested和object类型</td></tr>
+<tr><td>关联查询</td><td>JOIN（数据库保证）</td><td>$lookup（有限支持）</td><td>不支持JOIN</td></tr>
+<tr><td>数据局部性</td><td>差（多表分散）</td><td>好（一次IO读完整文档）</td><td>好（单文档自包含）</td></tr>
+<tr><td>设计哲学</td><td>数据不冗余，范式化</td><td>适度冗余，反范式化</td><td>完全冗余，为搜索优化</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout tip">
+<p><strong>Schema-on-Read vs Schema-on-Write</strong> 的本质区别：前者把数据格式校验推迟到应用层读取时，灵活但可能引入脏数据；后者在写入时就强制约束，严格但变更成本高。MongoDB 3.6+ 提供了 JSON Schema Validation 作为折中方案。</p>
+</div>
+</div>
+
+<div id="ch1-2">
+<h3>1.2 MongoDB BSON 结构与 Schema 设计模式</h3>
+
+<h4>BSON 是什么？</h4>
+<p>BSON (Binary JSON) 是 MongoDB 内部存储格式。相比 JSON，它额外支持了 Date、ObjectId、BinData、Decimal128 等类型，并且以长度前缀编码方式存储，使得数据库可以快速跳过不需要的字段。</p>
+
+<pre><code>// 一个典型的 MongoDB 文档 —— 电商订单
+{
+  "_id": ObjectId("507f1f77bcf86cd799439011"),
+  "order_no": "ORD-2024-001",
+  "customer": {                          // 嵌套文档
+    "name": "张三",
+    "phone": "13800138000",
+    "address": {
+      "province": "浙江",
+      "city": "杭州",
+      "detail": "西湖区文三路100号"
+    }
+  },
+  "items": [                             // 数组
+    { "sku": "SKU-A001", "name": "机械键盘", "price": NumberDecimal("599.00"), "quantity": 1 },
+    { "sku": "SKU-B002", "name": "鼠标垫", "price": NumberDecimal("49.90"), "quantity": 2 }
+  ],
+  "total_amount": NumberDecimal("698.80"),
+  "status": "paid",
+  "created_at": ISODate("2024-03-15T10:30:00Z"),
+  "tags": ["electronics", "peripheral"]
+}</code></pre>
+
+<div class="callout antirez">
+<p><strong>对比 MySQL 实现同样的订单：</strong>需要 orders 表 + order_items 表 + customers 表 + addresses 表，至少 4 张表通过外键关联。MongoDB 一个文档搞定，读取时一次磁盘 IO 即可获取完整订单信息——这就是<strong>数据局部性 (Data Locality)</strong> 的优势。</p>
+</div>
+
+<h4>三种经典 Schema 设计模式</h4>
+
+<p><strong>模式一：嵌入模式 (Embedded)</strong> —— 一对少关系，如用户与地址</p>
+<pre><code>// 地址嵌入用户文档
+{ "_id": 1, "name": "李四", "addresses": [
+    { "type": "home", "city": "北京" },
+    { "type": "work", "city": "上海" }
+]}</code></pre>
+
+<p><strong>模式二：引用模式 (Reference)</strong> —— 一对多/多对多，如文章与评论</p>
+<pre><code>// articles 集合
+{ "_id": "article_1", "title": "MongoDB设计", "author_id": "user_001" }
+// comments 集合（独立存储，通过 article_id 引用）
+{ "_id": "c1", "article_id": "article_1", "text": "好文！", "user_id": "user_002" }</code></pre>
+
+<p><strong>模式三：桶模式 (Bucket Pattern)</strong> —— 时序数据，如 IoT 传感器</p>
+<pre><code>// 每小时聚合为一个文档，减少文档数量
+{
+  "sensor_id": "temp_001",
+  "bucket_start": ISODate("2024-03-15T10:00:00Z"),
+  "measurements": [
+    { "ts": ISODate("...T10:00:05Z"), "val": 23.5 },
+    { "ts": ISODate("...T10:00:10Z"), "val": 23.6 }
+  ],
+  "count": 720, "sum": 16920.0, "avg": 23.5
+}</code></pre>
+</div>
+
+<div id="ch1-3">
+<h3>1.3 Elasticsearch 的 JSON 文档与 Mapping</h3>
+
+<h4>ES 的文档模型特点</h4>
+<p>Elasticsearch 中每个文档也是 JSON，但它的设计初衷完全不同——<strong>ES 的文档不是为了存储主数据，而是为了被搜索</strong>。</p>
+
+<pre><code>// ES 文档示例 —— 商品搜索索引
+PUT /products/_doc/1
+{
+  "title": "Sony WH-1000XM5 降噪耳机",
+  "description": "行业领先的降噪技术，30小时续航...",
+  "brand": "Sony",
+  "price": 2499.00,
+  "categories": ["电子产品", "耳机", "降噪耳机"],
+  "specs": { "weight": "250g", "battery_life": "30h" },
+  "reviews": [
+    { "user": "买家A", "score": 5, "text": "音质绝佳" },
+    { "user": "买家B", "score": 4, "text": "佩戴舒适" }
+  ]
+}</code></pre>
+
+<h4>Mapping：ES 的 Schema 定义</h4>
+<pre><code>PUT /products
+{
+  "mappings": {
+    "properties": {
+      "title":       { "type": "text", "analyzer": "ik_max_word" },
+      "brand":       { "type": "keyword" },         // 精确匹配，不分词
+      "price":       { "type": "float" },
+      "categories":  { "type": "keyword" },
+      "specs":       { "type": "object" },          // 扁平化存储
+      "reviews":     { "type": "nested" },          // 独立索引每个子文档
+      "created_at":  { "type": "date" }
+    }
+  }
+}</code></pre>
+
+<div class="callout tip">
+<p><strong>text vs keyword —— 面试必考：</strong><code>text</code> 类型会被分词器拆分为多个 term 建立倒排索引，适合全文搜索。<code>keyword</code> 类型整体作为一个 term，适合精确过滤、聚合和排序。</p>
+</div>
+
+<h4>nested vs object —— 关键区别</h4>
+<pre><code>// object 类型内部存储（扁平化，关联丢失）
+{ "reviews.user": ["买家A", "买家B"], "reviews.score": [5, 4] }
+// 查询 "买家A 且 score=4" 会错误命中！
+
+// nested 类型：每个子文档独立索引为隐藏文档
+// 查询 "买家A 且 score=4" 正确返回空结果</code></pre>
+</div>
+
+</section>
+
+<!-- ==================== 第二章 ==================== -->
+<section id="ch2">
+<h2>二、存储引擎：WiredTiger &amp; Lucene</h2>
+
+<div id="ch2-1">
+<h3>2.1 MongoDB WiredTiger 存储引擎</h3>
+
+<p>从 MongoDB 3.2 开始，WiredTiger 成为默认存储引擎。理解它的架构，是理解 MongoDB 性能表现的关键。</p>
+
+<h4>核心架构</h4>
+<div class="diagram">
+<svg viewBox="0 0 800 400" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="wt-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#34d399;stop-opacity:0.15"/>
+      <stop offset="100%" style="stop-color:#34d399;stop-opacity:0.03"/>
+    </linearGradient>
+  </defs>
+  <rect x="250" y="10" width="300" height="40" rx="8" fill="#222838" stroke="#34d399" stroke-width="2"/>
+  <text x="400" y="36" text-anchor="middle" fill="#e2e8f0" font-size="14" font-family="sans-serif">Application (Java Driver)</text>
+  <line x1="400" y1="50" x2="400" y2="75" stroke="#64748b" stroke-width="2" marker-end="url(#arr)"/>
+  <defs><marker id="arr" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+  <rect x="100" y="80" width="600" height="100" rx="12" fill="url(#wt-grad)" stroke="#34d399" stroke-width="2"/>
+  <text x="400" y="102" text-anchor="middle" fill="#34d399" font-size="13" font-weight="bold" font-family="sans-serif">WiredTiger Cache (内存)</text>
+  <rect x="130" y="112" width="150" height="50" rx="6" fill="#141820" stroke="#2a3344"/>
+  <text x="205" y="135" text-anchor="middle" fill="#e2e8f0" font-size="11" font-family="sans-serif">Clean Pages</text>
+  <text x="205" y="152" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">从磁盘读入的页</text>
+  <rect x="320" y="112" width="150" height="50" rx="6" fill="#141820" stroke="#f87171"/>
+  <text x="395" y="135" text-anchor="middle" fill="#e2e8f0" font-size="11" font-family="sans-serif">Dirty Pages</text>
+  <text x="395" y="152" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">被修改的页</text>
+  <rect x="510" y="112" width="160" height="50" rx="6" fill="#141820" stroke="#2a3344"/>
+  <text x="590" y="135" text-anchor="middle" fill="#e2e8f0" font-size="11" font-family="sans-serif">Internal Pages</text>
+  <text x="590" y="152" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">B-Tree索引节点</text>
+  <line x1="400" y1="180" x2="400" y2="210" stroke="#64748b" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="50" y="215" width="320" height="55" rx="10" fill="#1c2130" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="210" y="238" text-anchor="middle" fill="#f59e0b" font-size="12" font-weight="bold" font-family="sans-serif">Checkpoint (检查点)</text>
+  <text x="210" y="258" text-anchor="middle" fill="#64748b" font-size="10" font-family="sans-serif">每60秒将Dirty Pages刷盘</text>
+  <rect x="430" y="215" width="320" height="55" rx="10" fill="#1c2130" stroke="#f87171" stroke-width="1.5"/>
+  <text x="590" y="238" text-anchor="middle" fill="#f87171" font-size="12" font-weight="bold" font-family="sans-serif">Journal (WAL预写日志)</text>
+  <text x="590" y="258" text-anchor="middle" fill="#64748b" font-size="10" font-family="sans-serif">每次写操作先记日志，崩溃恢复</text>
+  <line x1="210" y1="270" x2="210" y2="300" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="590" y1="270" x2="590" y2="300" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="50" y="305" width="700" height="80" rx="12" fill="#0d1117" stroke="#3b82f6" stroke-width="2"/>
+  <text x="400" y="330" text-anchor="middle" fill="#3b82f6" font-size="13" font-weight="bold" font-family="sans-serif">磁盘存储层</text>
+  <rect x="80" y="342" width="170" height="30" rx="4" fill="#141820" stroke="#2a3344"/>
+  <text x="165" y="362" text-anchor="middle" fill="#e2e8f0" font-size="10" font-family="sans-serif">Data Files (.wt)</text>
+  <rect x="280" y="342" width="170" height="30" rx="4" fill="#141820" stroke="#2a3344"/>
+  <text x="365" y="362" text-anchor="middle" fill="#e2e8f0" font-size="10" font-family="sans-serif">Index Files (.wt)</text>
+  <rect x="480" y="342" width="200" height="30" rx="4" fill="#141820" stroke="#2a3344"/>
+  <text x="580" y="362" text-anchor="middle" fill="#e2e8f0" font-size="10" font-family="sans-serif">Journal Files (.journal)</text>
+</svg>
+</div>
+
+<h4>WiredTiger 关键特性</h4>
+<div class="table-wrapper">
+<table>
+<thead><tr><th>特性</th><th>说明</th><th>面试加分点</th></tr></thead>
+<tbody>
+<tr><td>文档级并发控制</td><td>MVCC + 文档级锁（单操作）；多文档事务使用乐观冲突检测</td><td>对比 MyISAM 表锁、InnoDB 行锁</td></tr>
+<tr><td>压缩</td><td>数据用 Snappy，索引用 Prefix 压缩，节省 60-80% 空间</td><td>可配置为 zlib/zstd 获得更高压缩比</td></tr>
+<tr><td>检查点机制</td><td>默认 60s 一次，保证数据一致性快照</td><td>类似 InnoDB 的 fuzzy checkpoint</td></tr>
+<tr><td>Journal (WAL)</td><td>预写日志，保证崩溃后恢复到最后一次提交</td><td>默认 100ms 刷盘; j:true 立即刷盘</td></tr>
+<tr><td>Cache</td><td>默认 max((RAM-1GB)*50%, 256MB)</td><td>与 OS Page Cache 互补，不要超配</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>写入流程</h4>
+<pre><code>// WiredTiger 一次写操作的完整路径：
+1. 客户端发起 insertOne() / updateOne()
+2. MongoDB 获取该文档的意向写锁 (Intent Exclusive)
+3. 修改 WiredTiger Cache 中的 B-Tree 页 → 标记为 Dirty Page
+4. 同时写入 Journal (WAL) → 保证持久性
+5. 返回客户端写入确认
+6. 后台线程：Checkpoint 定期将 Dirty Pages 刷入 .wt 数据文件
+
+// 关键配置：
+writeConcern: { w: 1, j: true }  // j:true 确保 Journal 刷盘后才确认</code></pre>
+</div>
+
+<div id="ch2-2">
+<h3>2.2 Elasticsearch Lucene 存储架构</h3>
+
+<p>Elasticsearch 底层是 Apache Lucene。每个 ES 分片 (Shard) 就是一个完整的 Lucene 索引。理解 Lucene 的 Segment 架构，是理解 ES 近实时搜索的关键。</p>
+
+<div class="diagram">
+<svg viewBox="0 0 800 380" xmlns="http://www.w3.org/2000/svg">
+  <rect x="50" y="10" width="700" height="45" rx="10" fill="#1c2130" stroke="#f59e0b" stroke-width="2"/>
+  <text x="400" y="38" text-anchor="middle" fill="#f59e0b" font-size="14" font-weight="bold" font-family="sans-serif">ES Index: "products" (逻辑概念)</text>
+  <line x1="200" y1="55" x2="200" y2="80" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="400" y1="55" x2="400" y2="80" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="600" y1="55" x2="600" y2="80" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="100" y="85" width="200" height="35" rx="8" fill="#222838" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="200" y="108" text-anchor="middle" fill="#22d3ee" font-size="11" font-family="sans-serif">Shard 0 (Lucene Index)</text>
+  <rect x="300" y="85" width="200" height="35" rx="8" fill="#222838" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="400" y="108" text-anchor="middle" fill="#22d3ee" font-size="11" font-family="sans-serif">Shard 1 (Lucene Index)</text>
+  <rect x="500" y="85" width="200" height="35" rx="8" fill="#222838" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="600" y="108" text-anchor="middle" fill="#22d3ee" font-size="11" font-family="sans-serif">Shard 2 (Lucene Index)</text>
+  <text x="400" y="145" text-anchor="middle" fill="#64748b" font-size="10" font-style="italic" font-family="sans-serif">展开 Shard 0 内部结构</text>
+  <rect x="50" y="158" width="700" height="210" rx="12" fill="rgba(245,158,11,0.03)" stroke="#f59e0b" stroke-width="1" stroke-dasharray="4"/>
+  <rect x="80" y="175" width="185" height="110" rx="8" fill="#0d1117" stroke="#34d399" stroke-width="1.5"/>
+  <text x="172" y="195" text-anchor="middle" fill="#34d399" font-size="10" font-weight="bold" font-family="sans-serif">Segment 0 (已提交)</text>
+  <text x="172" y="215" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">Inverted Index</text>
+  <text x="172" y="232" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">Stored Fields</text>
+  <text x="172" y="249" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">Doc Values</text>
+  <text x="172" y="266" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">.del 标记文件</text>
+  <rect x="295" y="175" width="185" height="110" rx="8" fill="#0d1117" stroke="#34d399" stroke-width="1.5"/>
+  <text x="387" y="195" text-anchor="middle" fill="#34d399" font-size="10" font-weight="bold" font-family="sans-serif">Segment 1 (已提交)</text>
+  <text x="387" y="215" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">Inverted Index</text>
+  <text x="387" y="232" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">Stored Fields</text>
+  <text x="387" y="249" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">Doc Values</text>
+  <text x="387" y="266" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">.del 标记文件</text>
+  <rect x="510" y="175" width="210" height="110" rx="8" fill="#0d1117" stroke="#f87171" stroke-width="1.5" stroke-dasharray="4"/>
+  <text x="615" y="195" text-anchor="middle" fill="#f87171" font-size="10" font-weight="bold" font-family="sans-serif">In-Memory Buffer</text>
+  <text x="615" y="218" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">新写入文档暂存</text>
+  <text x="615" y="238" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">refresh后→新Segment</text>
+  <text x="615" y="258" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">(默认每秒refresh)</text>
+  <text x="615" y="278" text-anchor="middle" fill="#f87171" font-size="9" font-family="sans-serif">此时不可搜索!</text>
+  <rect x="200" y="305" width="400" height="50" rx="8" fill="#1c2130" stroke="#f87171" stroke-width="1.5"/>
+  <text x="400" y="328" text-anchor="middle" fill="#f87171" font-size="11" font-weight="bold" font-family="sans-serif">Translog (事务日志)</text>
+  <text x="400" y="346" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">每次写入追加到translog，保证数据不丢失（类似WAL）</text>
+</svg>
+</div>
+
+<h4>Lucene Segment 核心概念</h4>
+<div class="table-wrapper">
+<table>
+<thead><tr><th>概念</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>Segment</td><td>最小索引单元，一旦写入磁盘就<strong>不可变</strong>。更新 = 标记旧文档删除 + 写入新文档到新 Segment</td></tr>
+<tr><td>Commit Point</td><td>记录当前所有有效 Segments 的元数据文件</td></tr>
+<tr><td>Refresh</td><td>将内存 Buffer 写成新 Segment 并打开供搜索（默认1秒），"近实时"的来源</td></tr>
+<tr><td>Flush</td><td>将 Segments 通过 fsync 持久化到磁盘，并清空 Translog</td></tr>
+<tr><td>Merge</td><td>后台合并小 Segments 为大 Segment，同时物理删除标记为 deleted 的文档</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout warn">
+<p><strong>为什么 ES 是"近实时"而不是"实时"？</strong>新写入的文档先进入 In-Memory Buffer，必须等待 refresh（默认1秒）后生成新 Segment 才能被搜索到。可通过 <code>POST /index/_refresh</code> 手动触发，但频繁 refresh 会导致大量小 Segment，影响性能。</p>
+</div>
+</div>
+
+<div id="ch2-3">
+<h3>2.3 存储引擎对比</h3>
+
+<div class="table-wrapper">
+<table>
+<thead><tr><th>对比维度</th><th><span class="tag-kafka">WiredTiger</span></th><th><span class="tag-rocketmq">Lucene</span></th><th><span class="tag-pulsar">InnoDB</span></th></tr></thead>
+<tbody>
+<tr><td>数据结构</td><td>B+ Tree 变体</td><td>倒排索引 + Segment</td><td>B+ Tree (聚簇索引)</td></tr>
+<tr><td>更新方式</td><td>原地更新 (in-place)</td><td>追加写 (immutable segments)</td><td>原地更新 + UNDO日志</td></tr>
+<tr><td>并发控制</td><td>MVCC + 文档级锁</td><td>Segment不可变，无需加锁</td><td>MVCC + 行锁 + 间隙锁</td></tr>
+<tr><td>压缩算法</td><td>Snappy/zlib/zstd</td><td>LZ4/DEFLATE</td><td>LZ4/zlib</td></tr>
+<tr><td>WAL机制</td><td>Journal文件</td><td>Translog</td><td>Redo Log</td></tr>
+<tr><td>缓存策略</td><td>自管理 WiredTiger Cache</td><td>依赖 OS Page Cache</td><td>自管理 Buffer Pool</td></tr>
+<tr><td>空间回收</td><td>重用空闲页</td><td>Segment Merge时回收</td><td>OPTIMIZE TABLE / 自动</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout antirez">
+<p><strong>Kleppmann 视角 (DDIA Ch.3)：</strong>WiredTiger 和 InnoDB 都是"面向更新"的存储引擎（B-Tree 原地修改），而 Lucene 是"面向追加"的存储引擎（Segment 不可变）。后者的优势：读不需要加锁、顺序写性能好、崩溃恢复简单。代价：更新和删除开销大（标记+合并）、空间放大。Lucene 的 Segment 架构与 LSM-Tree 理念相似（不可变、后台合并）但不完全等同（无 level 分层）。</p>
+</div>
+</div>
+
+</section>
+
+<!-- ==================== 第三章 ==================== -->
+<section id="ch3">
+<h2>三、索引机制：B-Tree &amp; 倒排索引</h2>
+
+<div id="ch3-1">
+<h3>3.1 MongoDB B-Tree 索引</h3>
+
+<p>MongoDB 索引底层使用 WiredTiger 的 B+ Tree 变体。核心区别：MongoDB 传统上没有"聚簇索引"（5.3+ 引入 Clustered Collection），默认所有索引是非聚簇的，叶节点存储指向文档的 RecordId。</p>
+
+<h4>索引类型全景</h4>
+<div class="table-wrapper">
+<table>
+<thead><tr><th>索引类型</th><th>用途</th><th>示例</th></tr></thead>
+<tbody>
+<tr><td>单字段索引</td><td>最基础，对一个字段建 B-Tree</td><td><code>db.users.createIndex({ age: 1 })</code></td></tr>
+<tr><td>复合索引</td><td>多字段联合，遵循最左前缀</td><td><code>db.orders.createIndex({ status: 1, created_at: -1 })</code></td></tr>
+<tr><td>多键索引 (Multikey)</td><td>自动对数组每个元素建索引</td><td><code>db.products.createIndex({ tags: 1 })</code></td></tr>
+<tr><td>文本索引</td><td>全文搜索（弱于ES）</td><td><code>db.articles.createIndex({ content: "text" })</code></td></tr>
+<tr><td>地理空间索引</td><td>地理位置查询</td><td><code>db.stores.createIndex({ location: "2dsphere" })</code></td></tr>
+<tr><td>哈希索引</td><td>等值查询，用于Hash分片</td><td><code>db.users.createIndex({ user_id: "hashed" })</code></td></tr>
+<tr><td>TTL索引</td><td>自动过期删除文档</td><td><code>createIndex({ expire_at: 1 }, { expireAfterSeconds: 0 })</code></td></tr>
+<tr><td>唯一索引</td><td>保证字段值唯一</td><td><code>createIndex({ email: 1 }, { unique: true })</code></td></tr>
+<tr><td>部分索引</td><td>只对满足条件的文档建索引</td><td><code>createIndex({ age: 1 }, { partialFilterExpression: {age:{$gt:18}} })</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>复合索引与 ESR 规则</h4>
+<pre><code>// 查询：查找"已付款"订单，按时间倒序，金额大于100
+db.orders.find({ status: "paid", amount: { $gt: 100 } }).sort({ created_at: -1 })
+
+// 最优索引（ESR规则：Equality → Sort → Range）：
+db.orders.createIndex({ status: 1, created_at: -1, amount: 1 })
+//                       ↑ Equality    ↑ Sort          ↑ Range
+
+// 原因：
+// 1. Equality 放最前：直接定位到 B-Tree 子树
+// 2. Sort 紧随其后：避免内存排序 (SORT_IN_MEMORY)
+// 3. Range 放最后：范围条件会"打断"后续字段的索引利用</code></pre>
+
+<div class="callout tip">
+<p><strong>MongoDB vs MySQL 索引差异：</strong>1) MySQL InnoDB 有聚簇索引，MongoDB 没有；2) MongoDB 多键索引可自动对数组建索引；3) MongoDB 支持部分索引(Partial)，MySQL 不支持（PostgreSQL 支持）；4) MongoDB 的 <code>_id</code> 自动创建唯一索引，类似 PRIMARY KEY。</p>
+</div>
+</div>
+
+<div id="ch3-2">
+<h3>3.2 Elasticsearch 倒排索引</h3>
+
+<p>倒排索引是搜索引擎的灵魂。核心思想：<strong>从"文档→词"的映射，反转为"词→文档"的映射</strong>。</p>
+
+<h4>倒排索引结构</h4>
+<div class="diagram">
+<svg viewBox="0 0 800 320" xmlns="http://www.w3.org/2000/svg">
+  <text x="50" y="25" fill="#f59e0b" font-size="12" font-weight="bold" font-family="sans-serif">原始文档：</text>
+  <rect x="50" y="35" width="300" height="25" rx="4" fill="#0d1117" stroke="#2a3344"/>
+  <text x="60" y="52" fill="#e2e8f0" font-size="10" font-family="sans-serif">Doc1: "Java 并发编程实战"</text>
+  <rect x="50" y="64" width="300" height="25" rx="4" fill="#0d1117" stroke="#2a3344"/>
+  <text x="60" y="81" fill="#e2e8f0" font-size="10" font-family="sans-serif">Doc2: "Java 虚拟机深入理解"</text>
+  <rect x="50" y="93" width="300" height="25" rx="4" fill="#0d1117" stroke="#2a3344"/>
+  <text x="60" y="110" fill="#e2e8f0" font-size="10" font-family="sans-serif">Doc3: "并发编程的艺术"</text>
+  <text x="380" y="80" fill="#64748b" font-size="20" font-family="sans-serif">→</text>
+  <text x="380" y="100" fill="#64748b" font-size="9" font-family="sans-serif">分词+反转</text>
+  <text x="440" y="25" fill="#22d3ee" font-size="12" font-weight="bold" font-family="sans-serif">倒排索引：</text>
+  <rect x="440" y="35" width="90" height="22" rx="3" fill="#222838" stroke="#22d3ee"/>
+  <text x="485" y="50" text-anchor="middle" fill="#e2e8f0" font-size="9" font-family="sans-serif">Term</text>
+  <rect x="540" y="35" width="200" height="22" rx="3" fill="#222838" stroke="#22d3ee"/>
+  <text x="640" y="50" text-anchor="middle" fill="#e2e8f0" font-size="9" font-family="sans-serif">Posting List</text>
+  <rect x="440" y="61" width="90" height="22" rx="3" fill="#0d1117" stroke="#2a3344"/>
+  <text x="485" y="76" text-anchor="middle" fill="#34d399" font-size="9" font-family="sans-serif">Java</text>
+  <rect x="540" y="61" width="200" height="22" rx="3" fill="#0d1117" stroke="#2a3344"/>
+  <text x="640" y="76" text-anchor="middle" fill="#e2e8f0" font-size="9" font-family="sans-serif">[Doc1, Doc2]</text>
+  <rect x="440" y="87" width="90" height="22" rx="3" fill="#0d1117" stroke="#2a3344"/>
+  <text x="485" y="102" text-anchor="middle" fill="#34d399" font-size="9" font-family="sans-serif">并发</text>
+  <rect x="540" y="87" width="200" height="22" rx="3" fill="#0d1117" stroke="#2a3344"/>
+  <text x="640" y="102" text-anchor="middle" fill="#e2e8f0" font-size="9" font-family="sans-serif">[Doc1, Doc3]</text>
+  <rect x="440" y="113" width="90" height="22" rx="3" fill="#0d1117" stroke="#2a3344"/>
+  <text x="485" y="128" text-anchor="middle" fill="#34d399" font-size="9" font-family="sans-serif">编程</text>
+  <rect x="540" y="113" width="200" height="22" rx="3" fill="#0d1117" stroke="#2a3344"/>
+  <text x="640" y="128" text-anchor="middle" fill="#e2e8f0" font-size="9" font-family="sans-serif">[Doc1, Doc3]</text>
+  <rect x="440" y="139" width="90" height="22" rx="3" fill="#0d1117" stroke="#2a3344"/>
+  <text x="485" y="154" text-anchor="middle" fill="#34d399" font-size="9" font-family="sans-serif">虚拟机</text>
+  <rect x="540" y="139" width="200" height="22" rx="3" fill="#0d1117" stroke="#2a3344"/>
+  <text x="640" y="154" text-anchor="middle" fill="#e2e8f0" font-size="9" font-family="sans-serif">[Doc2]</text>
+  <text x="50" y="155" fill="#f87171" font-size="11" font-weight="bold" font-family="sans-serif">Posting List 内部结构：</text>
+  <rect x="50" y="165" width="700" height="90" rx="8" fill="#0d1117" stroke="#2a3344"/>
+  <text x="70" y="188" fill="#22d3ee" font-size="10" font-family="sans-serif">DocId List:     [1, 3, 7, 15, 42, ...]   — 文档编号(FOR/RoaringBitmap压缩)</text>
+  <text x="70" y="210" fill="#22d3ee" font-size="10" font-family="sans-serif">Term Frequency: [2, 1, 3, 1, 2, ...]    — 每个文档中出现次数(用于评分)</text>
+  <text x="70" y="232" fill="#22d3ee" font-size="10" font-family="sans-serif">Positions:      [[0,5],[3],[1,4,7],...] — 位置信息(用于短语查询)</text>
+  <text x="70" y="250" fill="#22d3ee" font-size="10" font-family="sans-serif">Offsets:        起始/结束字符偏移(用于高亮)</text>
+</svg>
+</div>
+
+<h4>倒排索引的多层结构</h4>
+<pre><code>┌─────────────────────────────────────────────────────────────────┐
+│  Term Index (FST - Finite State Transducer)                     │
+│  → 内存中的前缀树变体，快速定位 Term 在磁盘的位置               │
+├─────────────────────────────────────────────────────────────────┤
+│  Term Dictionary (.tim 文件)                                     │
+│  → 所有 Term 按字典序排列，存储在磁盘上，Block组织+前缀压缩     │
+├─────────────────────────────────────────────────────────────────┤
+│  Posting List (.doc / .pos / .pay 文件)                          │
+│  → 每个 Term 对应的文档列表 + 词频 + 位置信息                   │
+│  → Frame of Reference (FOR) 增量编码 + 压缩                     │
+└─────────────────────────────────────────────────────────────────┘</code></pre>
+
+<h4>BM25 评分算法</h4>
+<pre><code>// BM25 是 ES 默认相关性评分算法
+score(D,Q) = Σ IDF(qi) * [ f(qi,D)*(k1+1) ] / [ f(qi,D) + k1*(1-b+b*|D|/avgdl) ]
+
+// IDF(qi)  = 逆文档频率，越稀有的词权重越高
+// f(qi,D)  = 词qi在文档D中出现次数
+// k1=1.2   = 词频饱和参数
+// b=0.75   = 文档长度归一化参数
+
+// 直觉：稀有词比常见词重要；出现3次比1次重要但不是3倍（饱和）；短文档权重更高</code></pre>
+</div>
+
+<div id="ch3-3">
+<h3>3.3 索引优化与面试高频题</h3>
+
+<div class="qa-block">
+<div class="qa-question"><p>MongoDB 复合索引的最左前缀原则和 MySQL 有区别吗？</p></div>
+<div class="qa-answer"><p>逻辑一致：{a:1,b:1,c:1} 支持 {a}、{a,b}、{a,b,c} 查询，不支持 {b}、{c}。区别在于 MongoDB 的 sort 也能利用索引：find({a:1}).sort({b:1}) 时索引 {a:1,b:1} 可避免内存排序。</p></div>
+</div>
+
+<div class="qa-block">
+<div class="qa-question"><p>ES 为什么早期不适合数值范围查询？现在改善了吗？</p></div>
+<div class="qa-answer"><p>早期倒排索引把数值也按Term处理，范围查询需遍历大量Term。ES 5.0+ 数值字段改用 <strong>BKD-Tree (Points)</strong>，范围查询性能大幅提升。但对于高频 range + sort + 聚合组合场景，MongoDB B-Tree 在索引直接提供排序这一点上仍更自然高效。</p></div>
+</div>
+
+<div class="qa-block">
+<div class="qa-question"><p>什么是 Covered Query？两者都支持吗？</p></div>
+<div class="qa-answer"><p>覆盖查询指只访问索引即可返回结果，不需回表。两者都支持。MongoDB 通过 projection 实现：<code>find({age:25}, {name:1,age:1,_id:0})</code>，配合索引 {age:1,name:1}，explain 中 totalDocsExamined: 0。</p></div>
+</div>
+
+<div class="qa-block">
+<div class="qa-question"><p>ES 的 Doc Values 是什么？为什么需要它？</p></div>
+<div class="qa-answer"><p>倒排索引是"Term→DocId"映射，适合搜索。排序/聚合需要"DocId→Value"的正向映射。Doc Values 就是列式存储结构，索引时生成。keyword/数值/日期默认开启，text 类型不支持（需 fielddata，不推荐）。</p></div>
+</div>
+</div>
+
+</section>
+
+<!-- ==================== 第四章 ==================== -->
+<section id="ch4">
+<h2>四、分布式架构：分片、副本集与一致性</h2>
+
+<div id="ch4-1">
+<h3>4.1 MongoDB 副本集 (Replica Set)</h3>
+
+<p>MongoDB 高可用基础是副本集——一组维护相同数据的 mongod 实例。核心问题：数据怎么同步？主节点挂了怎么办？</p>
+
+<div class="diagram">
+<svg viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg">
+  <rect x="250" y="10" width="200" height="60" rx="12" fill="#222838" stroke="#34d399" stroke-width="2.5"/>
+  <text x="350" y="38" text-anchor="middle" fill="#34d399" font-size="13" font-weight="bold" font-family="sans-serif">Primary</text>
+  <text x="350" y="57" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">接受所有写操作，维护 oplog</text>
+  <line x1="285" y1="70" x2="150" y2="120" stroke="#f59e0b" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="415" y1="70" x2="550" y2="120" stroke="#f59e0b" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="185" y="95" fill="#f59e0b" font-size="8" font-family="sans-serif">oplog复制</text>
+  <text x="480" y="95" fill="#f59e0b" font-size="8" font-family="sans-serif">oplog复制</text>
+  <rect x="50" y="125" width="200" height="60" rx="12" fill="#222838" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="150" y="152" text-anchor="middle" fill="#22d3ee" font-size="12" font-weight="bold" font-family="sans-serif">Secondary 1</text>
+  <text x="150" y="172" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">异步复制 oplog，可接受读</text>
+  <rect x="450" y="125" width="200" height="60" rx="12" fill="#222838" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="550" y="152" text-anchor="middle" fill="#22d3ee" font-size="12" font-weight="bold" font-family="sans-serif">Secondary 2</text>
+  <text x="550" y="172" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">异步复制 oplog，可接受读</text>
+  <rect x="100" y="210" width="500" height="25" rx="5" fill="rgba(248,113,113,0.08)" stroke="#f87171" stroke-width="1"/>
+  <text x="350" y="227" text-anchor="middle" fill="#f87171" font-size="9" font-family="sans-serif">心跳检测(每2秒) — 10秒无响应触发选举 — 基于Raft变体多数派投票</text>
+</svg>
+</div>
+
+<h4>选举机制与 Oplog</h4>
+<pre><code>// 选举流程（Raft 变体）：
+1. Primary 失联（心跳超时 electionTimeoutMillis=10s）
+2. Secondary 发起选举，自增 term，投票给自己
+3. 获得 N/2+1 多数派投票 → 成为新 Primary（实际选举2-5秒完成，总故障转移约12秒）
+4. 选举优先级：priority 配置值 > 数据新鲜度 > 网络延迟
+
+// Oplog 是固定大小 Capped Collection (local.oplog.rs)
+// 典型条目：
+{ "ts": Timestamp(1710500000, 1), "op": "i",  // i=insert u=update d=delete
+  "ns": "mydb.orders", "o": { "_id": ..., "status": "paid" } }
+// 特点：幂等！重放多次结果一样，保证网络抖动时的正确性</code></pre>
+</div>
+
+<div id="ch4-2">
+<h3>4.2 MongoDB 分片策略</h3>
+
+<div class="table-wrapper">
+<table>
+<thead><tr><th>策略</th><th>原理</th><th>优点</th><th>缺点</th><th>适用场景</th></tr></thead>
+<tbody>
+<tr><td>Range Sharding</td><td>按 Shard Key 值范围划分</td><td>范围查询高效</td><td>热点问题（单调递增key）</td><td>时间序列、地域查询</td></tr>
+<tr><td>Hash Sharding</td><td>对 Shard Key 取哈希后分片</td><td>写入均匀，避免热点</td><td>范围查询需广播所有分片</td><td>高写入、等值查询为主</td></tr>
+<tr><td>Zone Sharding</td><td>特定范围绑定到特定分片</td><td>数据局部性、合规</td><td>配置复杂</td><td>多地域部署</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout warn">
+<p><strong>如何选择 Shard Key？</strong>好的 Key 必须满足：1) <strong>高基数</strong>（值足够多）；2) <strong>低频率</strong>（不能大量文档同一值）；3) <strong>非单调递增</strong>（避免写入热点）。常见方案：Hash(user_id) 或复合 Key {tenant_id:1, created_at:1}。</p>
+</div>
+</div>
+
+<div id="ch4-3">
+<h3>4.3 ES 集群架构</h3>
+
+<h4>节点角色</h4>
+<div class="table-wrapper">
+<table>
+<thead><tr><th>角色</th><th>职责</th><th>配置</th></tr></thead>
+<tbody>
+<tr><td>Master Node</td><td>集群状态管理（创建/删除索引、分配Shard）</td><td><code>node.roles: [master]</code></td></tr>
+<tr><td>Data Node (Hot/Warm/Cold/Frozen)</td><td>存储分片，ES 8.x 按数据温度分层</td><td><code>node.roles: [data_hot]</code> 等</td></tr>
+<tr><td>Coordinating Node</td><td>接收请求，分发+合并结果</td><td><code>node.roles: []</code></td></tr>
+<tr><td>Ingest Node</td><td>写入前数据预处理 Pipeline</td><td><code>node.roles: [ingest]</code></td></tr>
+<tr><td>ML Node</td><td>机器学习推理（NLP模型、异常检测）</td><td><code>node.roles: [ml]</code></td></tr>
+<tr><td>Transform Node</td><td>持续转换聚合数据</td><td><code>node.roles: [transform]</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>分片与副本</h4>
+<pre><code>PUT /products
+{ "settings": {
+    "number_of_shards": 3,       // 主分片数（创建后不可更改！）
+    "number_of_replicas": 1      // 每个主分片的副本数（可动态调整）
+}}
+// 结果：3 Primary + 3 Replica = 6 个 Shard
+// Primary 和其 Replica 不会在同一节点
+
+// 路由公式：shard_num = hash(_routing) % number_of_shards
+// 默认 _routing = _id，可自定义实现数据亲和性</code></pre>
+</div>
+
+<div id="ch4-4">
+<h3>4.4 一致性模型对比</h3>
+
+<div class="table-wrapper">
+<table>
+<thead><tr><th>维度</th><th><span class="tag-kafka">MongoDB</span></th><th><span class="tag-rocketmq">Elasticsearch</span></th></tr></thead>
+<tbody>
+<tr><td>写确认</td><td>writeConcern: {w:1}主确认 / {w:"majority"}多数确认</td><td>wait_for_active_shards: 默认1</td></tr>
+<tr><td>读一致性</td><td>readConcern: "local"/"majority"/"linearizable"</td><td>默认近实时(1s延迟)</td></tr>
+<tr><td>一致性级别</td><td>可调：最终一致 → 线性一致</td><td>最终一致</td></tr>
+<tr><td>复制模式</td><td>异步(可通过writeConcern变同步)</td><td>主分片写入后同步到in-sync replicas</td></tr>
+<tr><td>脑裂防护</td><td>多数派选举(N/2+1)</td><td>7.x+自动仲裁</td></tr>
+</tbody>
+</table>
+</div>
+
+<pre><code>// MongoDB writeConcern — Java Driver
+MongoClientSettings settings = MongoClientSettings.builder()
+    .writeConcern(WriteConcern.MAJORITY
+        .withWTimeout(5000, TimeUnit.MILLISECONDS)
+        .withJournal(true))
+    .build();
+
+// 级别说明：
+// w:0       — Fire-and-forget（最快，可能丢数据）
+// w:1       — 等待Primary确认（默认）
+// w:"majority" — 多数节点确认（不会被回滚）
+// readConcern "linearizable" — 线性一致读（最强，性能最差）</code></pre>
+
+<div class="callout antirez">
+<p><strong>Kleppmann 视角 (DDIA Ch.9)：</strong>大多数业务用 "majority" 就够——保证读到的数据不会被回滚。若需因果一致性（如"读自己的写"），需使用 MongoDB 3.6+ 的 Causal Sessions（结合 readConcern:majority + afterClusterTime 追踪）。"linearizable" 等价于分布式系统中的线性一致性，代价是每次读都要联系多数节点确认 Primary 有效。</p>
+</div>
+</div>
+
+</section>
+
+<!-- ==================== 第五章 ==================== -->
+<section id="ch5">
+<h2>五、读写流程与性能优化</h2>
+
+<div id="ch5-1">
+<h3>5.1 MongoDB 读写流程</h3>
+
+<h4>写入流程</h4>
+<pre><code>// 一次写操作完整路径：
+1. Driver 序列化 → BSON → 发送 OP_MSG 到 mongos/mongod
+2. (分片集群) mongos 根据 shard key 路由到目标 Shard
+3. Primary 节点：
+   a. 获取集合级意向排他锁(IX) + 文档级排他锁
+   b. 写入 WiredTiger Cache (B-Tree修改)
+   c. 写入 Journal (WAL)
+   d. 生成 oplog 条目
+4. 根据 writeConcern 等待确认后返回
+5. 异步：Secondary 拉取 oplog 重放</code></pre>
+
+<h4>读取流程</h4>
+<pre><code>db.orders.find({ userId: "user_001", status: "paid" })
+         .sort({ createdAt: -1 }).limit(20)
+
+// 执行流程：
+// 1. Query Parser 解析 → 2. Query Planner 生成候选计划
+// 3. Optimizer 选最优（Plan Cache 或 Plan Race 竞赛）
+// 4. 执行：IXSCAN → FETCH → SORT(如索引不满足) → 返回
+
+// 使用 explain("executionStats") 分析：
+// - totalKeysExamined / totalDocsExamined：越接近返回条数越好
+// - stage: IXSCAN=好, COLLSCAN=坏（全表扫描）
+// - 100MB 内存排序限制(4.4+，之前为32MB)！超出需allowDiskUse:true</code></pre>
+
+<h4>性能调优清单</h4>
+<div class="table-wrapper">
+<table>
+<thead><tr><th>层面</th><th>优化手段</th><th>原理</th></tr></thead>
+<tbody>
+<tr><td>索引</td><td>ESR规则建复合索引</td><td>减少扫描，避免内存排序</td></tr>
+<tr><td>索引</td><td>Covered Query(投影)</td><td>不回表，纯索引返回</td></tr>
+<tr><td>查询</td><td>避免 $regex 前缀通配</td><td><code>/^abc/</code> 走索引，<code>/abc/</code> 全扫</td></tr>
+<tr><td>Schema</td><td>文档不超过几百KB</td><td>大文档致页分裂频繁</td></tr>
+<tr><td>内存</td><td>Working Set fit in Cache</td><td>Cache Miss致磁盘IO剧增，性能急剧下降</td></tr>
+<tr><td>写入</td><td>bulkWrite + unordered</td><td>减少网络往返，允许并行</td></tr>
+<tr><td>读取</td><td>readPreference: secondaryPreferred</td><td>读写分离</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+
+<div id="ch5-2">
+<h3>5.2 ES 写入与查询流程</h3>
+
+<h4>写入流程</h4>
+<pre><code>// ES 写入完整路径：
+1. Client → Coordinating Node（任意节点）
+2. 路由：hash(_id) % number_of_shards → 确定目标 Primary Shard
+3. Primary Shard：写入 In-Memory Buffer + 追加 Translog
+4. 并发复制到所有 Replica Shards
+5. 等待确认后返回客户端
+
+// 关键时间线：
+// Refresh (每1秒) → Buffer生成新Segment(可搜索)
+// Flush (Translog达512MB触发) → fsync到磁盘，清空Translog
+// Merge (后台) → 合并小Segments，物理删除.del标记文档
+// 注意：默认 translog.durability:"request"，每次写操作都fsync translog（数据已持久化）
+
+// 性能调参（批量导入时）：
+// index.refresh_interval: "30s"        — 减少Segment生成
+// index.translog.durability: "async"   — 异步刷盘换吞吐
+// indices.memory.index_buffer_size: "20%" — 增大Buffer</code></pre>
+
+<h4>查询流程（Query Then Fetch）</h4>
+<pre><code>// 分布式搜索两阶段：
+// Phase 1 - Query：广播到所有Shard → 每个Shard返回 top N 的(doc_id, score)
+//                   → Coordinating Node 全局排序取 top N
+// Phase 2 - Fetch：向目标Shard获取完整文档_source → 返回客户端
+
+// Deep Pagination 问题：from=9990, size=10（默认max_result_window=10000）
+// → 每个Shard返回10000条，5个Shard就是50000条在内存排序！
+// 解决：search_after（游标翻页）或 PIT + search_after</code></pre>
+
+<h4>查询优化策略</h4>
+<div class="table-wrapper">
+<table>
+<thead><tr><th>策略</th><th>做法</th><th>原理</th></tr></thead>
+<tbody>
+<tr><td>Filter vs Query</td><td>精确条件用filter</td><td>filter不计算评分，可缓存Bitset</td></tr>
+<tr><td>避免wildcard</td><td>用n-gram替代前缀通配</td><td>通配需遍历Term Dictionary</td></tr>
+<tr><td>routing优化</td><td>自定义_routing</td><td>查询只访问一个Shard</td></tr>
+<tr><td>预排序</td><td>index.sort.field</td><td>Segment内预排序，提前终止</td></tr>
+<tr><td>Force Merge</td><td>只读索引合并为1 Segment</td><td>减少Segment数加速查询</td></tr>
+<tr><td>Source Filtering</td><td>"_source":["title","price"]</td><td>减少网络传输</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+
+<div id="ch5-3">
+<h3>5.3 性能特征对比</h3>
+
+<div class="table-wrapper">
+<table>
+<thead><tr><th>场景</th><th><span class="tag-kafka">MongoDB</span></th><th><span class="tag-rocketmq">ES</span></th><th>原因</th></tr></thead>
+<tbody>
+<tr><td>单文档CRUD</td><td>极快(~1ms)</td><td>较慢(~5-10ms)</td><td>Mongo B-Tree直接定位</td></tr>
+<tr><td>批量写入</td><td>很快(10万+/s 单节点)</td><td>很快(数万/s 单节点)</td><td>Mongo bulk+unordered；ES先buffer后建索引(延后开销)</td></tr>
+<tr><td>全文搜索</td><td>差</td><td>极快</td><td>倒排索引天然优势</td></tr>
+<tr><td>精确查询+排序</td><td>很快</td><td>快</td><td>B-Tree直接支持排序</td></tr>
+<tr><td>聚合分析</td><td>一般</td><td>很快</td><td>ES列式Doc Values适合聚合</td></tr>
+<tr><td>深度分页</td><td>较好</td><td>差</td><td>ES分布式协调开销线性增长</td></tr>
+<tr><td>实时性</td><td>写后立即可读</td><td>~1秒延迟</td><td>ES需等refresh</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+
+</section>
+
+<!-- ==================== 第六章 ==================== -->
+<section id="ch6">
+<h2>六、事务与一致性保证</h2>
+
+<div id="ch6-1">
+<h3>6.1 MongoDB 多文档事务</h3>
+
+<p>MongoDB 4.0 引入副本集事务，4.2 扩展到分片集群。文档数据库也能提供 ACID 保证。</p>
+
+<h4>Java Spring 事务示例</h4>
+<pre><code>@Service
+public class TransferService {
+    @Autowired private MongoTemplate mongoTemplate;
+
+    @Transactional
+    public void transfer(String fromId, String toId, BigDecimal amount) {
+        // 扣款（注意：金融场景不要用 doubleValue()，应使用 Decimal128 保持精度）
+        Query from = Query.query(Criteria.where("_id").is(fromId));
+        mongoTemplate.updateFirst(from, new Update().inc("balance", new org.bson.types.Decimal128(amount.negate())), Account.class);
+        // 入账
+        Query to = Query.query(Criteria.where("_id").is(toId));
+        mongoTemplate.updateFirst(to, new Update().inc("balance", new org.bson.types.Decimal128(amount)), Account.class);
+        // 记录流水
+        mongoTemplate.insert(new TransferLog(fromId, toId, amount, LocalDateTime.now()));
+    }
+}
+
+// 配置
+@Bean
+MongoTransactionManager transactionManager(MongoDatabaseFactory dbFactory) {
+    return new MongoTransactionManager(dbFactory);
+}</code></pre>
+
+<h4>事务实现原理</h4>
+<pre><code>// 1. Snapshot Isolation（快照隔离）
+//    事务开始获取一致性快照时间戳，事务内读该时间戳版本
+//    WiredTiger MVCC 维护多版本
+
+// 2. 写冲突检测（乐观并发）
+//    两个事务改同一文档 → WriteConflict → 后者中止需重试
+
+// 3. 分片事务用两阶段提交 (2PC)
+//    Prepare → 各分片准备 → Commit
+
+// 4. 事务限制（面试必考！）
+//    - 默认60秒超时
+//    - 不能创建/删除集合或索引
+//    - 持有快照阻止旧版本回收
+//    - 4.0版本单事务oplog不超16MB（4.2+已取消此限制）</code></pre>
+
+<h4>隔离级别</h4>
+<div class="table-wrapper">
+<table>
+<thead><tr><th>级别</th><th>MongoDB实现</th><th>对应SQL标准</th></tr></thead>
+<tbody>
+<tr><td>Read Uncommitted</td><td>readConcern:"local"(非事务)</td><td>非标准RU：可读到本地已提交但未被多数确认的数据（可能回滚）</td></tr>
+<tr><td>Read Committed</td><td>readConcern:"majority"(非事务)</td><td>Read Committed</td></tr>
+<tr><td>Snapshot Isolation</td><td>多文档事务（默认）</td><td>介于RR和Serializable之间</td></tr>
+<tr><td>Linearizable</td><td>readConcern:"linearizable"</td><td>Serializable(读)</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+
+<div id="ch6-2">
+<h3>6.2 ES 的乐观并发控制</h3>
+
+<p>ES 没有传统事务，通过乐观锁处理并发写冲突：</p>
+
+<pre><code>// ES 7.x+ 使用 _seq_no + _primary_term 做乐观锁
+
+// 1. 读取文档获取版本
+GET /products/_doc/1
+// → "_seq_no": 42, "_primary_term": 3
+
+// 2. 带版本号更新
+POST /products/_update/1?if_seq_no=42&amp;if_primary_term=3
+{ "doc": { "stock": 99 } }
+// 如果版本变了 → 409 Conflict，客户端重试
+
+// Java 示例 — ES 8.x Java Client（注意：setIfSeqNo 与 retryOnConflict 不能同时使用）
+esClient.update(u -> u
+    .index("products").id("1")
+    .ifSeqNo(42L).ifPrimaryTerm(3L)
+    .doc(Map.of("stock", 99)),
+    Product.class);
+// 若需自动重试（不指定版本条件）：
+// esClient.update(u -> u.index("products").id("1").doc(Map.of("stock",99)).retryOnConflict(3), Product.class);
+
+// 原子脚本更新（避免竞态）
+POST /products/_update/1
+{ "script": {
+    "source": "if(ctx._source.stock>0){ctx._source.stock-=1;ctx._source.sold+=1}else{ctx.op='noop'}",
+    "lang": "painless"
+}}</code></pre>
+</div>
+
+<div id="ch6-3">
+<h3>6.3 与关系型数据库 ACID 对比</h3>
+
+<div class="table-wrapper">
+<table>
+<thead><tr><th>ACID</th><th><span class="tag-pulsar">MySQL InnoDB</span></th><th><span class="tag-kafka">MongoDB 4.2+</span></th><th><span class="tag-rocketmq">Elasticsearch</span></th></tr></thead>
+<tbody>
+<tr><td><strong>Atomicity</strong></td><td>完整：Undo Log回滚</td><td>单文档天然原子；多文档2PC+oplog</td><td>仅单文档原子</td></tr>
+<tr><td><strong>Consistency</strong></td><td>外键/CHECK/触发器</td><td>JSON Schema Validation(可选)</td><td>无，应用层保证</td></tr>
+<tr><td><strong>Isolation</strong></td><td>4种标准级别</td><td>Snapshot Isolation + readConcern</td><td>乐观锁+版本号</td></tr>
+<tr><td><strong>Durability</strong></td><td>Redo Log（持久性）+ Double Write Buffer（防页撕裂）</td><td>Journal + writeConcern{j:true}</td><td>Translog + fsync(默认每次请求)</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout antirez">
+<p><strong>Kleppmann 视角：</strong>文档数据库最初的设计哲学是通过嵌入（Embedding）将数据放在一个文档中，单文档原子更新就够了。但现实业务不可能全塞一个文档。MongoDB 最终实现多文档事务，证明复杂场景中 ACID 是刚需。但如果你发现大量使用多文档事务，往往说明 Schema 设计有问题——应重新考虑嵌入策略。</p>
+</div>
+</div>
+
+</section>
+
+<!-- ==================== 补充：2026新特性 ==================== -->
+<section id="ch-new">
+<h2>附：2026 必知新特性</h2>
+
+<h3>向量搜索与 AI 时代</h3>
+
+<h4>ES 8.x kNN 向量搜索</h4>
+<pre><code>// 定义 dense_vector 字段
+PUT /products
+{ "mappings": { "properties": {
+    "title":        { "type": "text" },
+    "title_vector": { "type": "dense_vector", "dims": 768,
+                      "index": true, "similarity": "cosine" }  // HNSW 索引
+}}}
+
+// kNN 向量搜索（语义搜索）
+GET /products/_search
+{ "knn": {
+    "field": "title_vector",
+    "query_vector": [0.12, -0.34, ...],  // 由 Embedding 模型生成
+    "k": 10, "num_candidates": 100
+  },
+  "fields": ["title"]
+}
+
+// 混合搜索（BM25 关键词 + 向量语义，RRF 融合排序）
+GET /products/_search
+{ "query": { "match": { "title": "降噪耳机" } },
+  "knn": { "field": "title_vector", "query_vector": [...], "k": 10, "num_candidates": 50 },
+  "rank": { "rrf": { "window_size": 100 } }  // Reciprocal Rank Fusion
+}</code></pre>
+
+<h4>MongoDB Atlas Vector Search</h4>
+<pre><code>// MongoDB 7.0+ Atlas Vector Search（集成在 Aggregation Pipeline 中）
+db.products.aggregate([
+  { "$vectorSearch": {
+      "index": "vector_index",
+      "path": "embedding",
+      "queryVector": [0.12, -0.34, ...],
+      "numCandidates": 100,
+      "limit": 10
+  }},
+  { "$project": { "title": 1, "score": { "$meta": "vectorSearchScore" } } }
+])
+
+// Atlas Search（内置 Lucene 全文搜索，无需独立 ES）
+db.products.aggregate([
+  { "$search": {
+      "index": "search_index",
+      "text": { "query": "降噪耳机", "path": "title", "fuzzy": { "maxEdits": 1 } }
+  }},
+  { "$limit": 20 }
+])</code></pre>
+
+<div class="callout tip">
+<p><strong>2026 面试重点：</strong>MongoDB Atlas Search 让"MongoDB + ES"双写架构不再是唯一选择。对于中等复杂度搜索需求，Atlas Search 可以在 MongoDB 内部直接完成，减少数据同步复杂度。但对于超大规模全文搜索+复杂聚合+向量混合场景，独立 ES 集群仍是首选。</p>
+</div>
+
+<h3>MongoDB 7.0 / 8.0 关键新特性</h3>
+
+<div class="table-wrapper">
+<table>
+<thead><tr><th>特性</th><th>版本</th><th>说明</th><th>面试价值</th></tr></thead>
+<tbody>
+<tr><td>Queryable Encryption</td><td>7.0</td><td>在加密字段上执行等值/范围查询，服务端永远看不到明文</td><td>安全合规场景必问</td></tr>
+<tr><td>Atlas Search</td><td>6.0+</td><td>集成 Lucene 引擎，支持全文搜索、facet、autocomplete</td><td>替代简单ES场景</td></tr>
+<tr><td>Atlas Vector Search</td><td>7.0</td><td>向量相似度搜索，支持 RAG/语义搜索</td><td>AI 应用必备</td></tr>
+<tr><td>Columnstore Indexes</td><td>7.0</td><td>列式存储索引，加速分析类聚合查询</td><td>HTAP 混合负载</td></tr>
+<tr><td>MongoDB 8.0 性能提升</td><td>8.0</td><td>读取性能提升 36%，批量写入提升 56%，时序集合提升 200%+</td><td>版本升级价值</td></tr>
+<tr><td>Stable API</td><td>5.0+</td><td>版本无关的 API 兼容性保证，驱动代码可跨大版本升级</td><td>长期维护策略</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>ES 8.x 关键变化</h3>
+
+<div class="table-wrapper">
+<table>
+<thead><tr><th>变化</th><th>影响</th><th>面试要点</th></tr></thead>
+<tbody>
+<tr><td>安全默认开启</td><td>TLS + 认证强制，不再允许匿名访问</td><td>部署和运维方式变化</td></tr>
+<tr><td>Java Client 全面替换</td><td>RestHighLevelClient 移除，必须用 co.elastic.clients</td><td>代码迁移必知</td></tr>
+<tr><td>kNN 向量搜索</td><td>原生 dense_vector + HNSW 索引</td><td>语义搜索/RAG 场景</td></tr>
+<tr><td>ES|QL</td><td>新查询语言，类 SQL 语法，面向数据分析</td><td>替代部分复杂聚合DSL</td></tr>
+<tr><td>Data Stream Lifecycle</td><td>简化版 ILM，适合时序数据自动管理</td><td>日志场景新方案</td></tr>
+<tr><td>Data Tiers 节点角色</td><td>data_hot/warm/cold/frozen 细分角色</td><td>生产集群架构设计</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="qa-block">
+<div class="qa-question"><p>2026 面试追问：MongoDB 有了 Atlas Search，还需要 ES 吗？</p></div>
+<div class="qa-answer"><p>看场景。Atlas Search 适合：搜索复杂度中等、不想维护双写同步、数据量在百GB级。独立 ES 适合：TB 级全文索引、需要复杂聚合/向量混合搜索、多数据源汇聚搜索、需要 Kibana 可视化分析。2026 的趋势是"能用一个系统解决就不用两个"，但大规模场景 ES 仍不可替代。</p></div>
+</div>
+</section>
+
+<!-- ==================== 第七章 ==================== -->
+<section id="ch7">
+<h2>七、典型场景对比与选型</h2>
+
+<div id="ch7-1">
+<h3>7.1 选型决策树</h3>
+
+<div class="diagram">
+<svg viewBox="0 0 750 420" xmlns="http://www.w3.org/2000/svg">
+  <rect x="275" y="5" width="200" height="36" rx="18" fill="#f87171" stroke="none"/>
+  <text x="375" y="28" text-anchor="middle" fill="#fff" font-size="11" font-weight="bold" font-family="sans-serif">核心需求是什么？</text>
+  <line x1="275" y1="23" x2="110" y2="65" stroke="#f59e0b" stroke-width="1.5"/>
+  <line x1="375" y1="41" x2="375" y2="70" stroke="#34d399" stroke-width="1.5"/>
+  <line x1="475" y1="23" x2="640" y2="65" stroke="#3b82f6" stroke-width="1.5"/>
+  <rect x="20" y="65" width="180" height="30" rx="6" fill="#1c2130" stroke="#f59e0b"/>
+  <text x="110" y="84" text-anchor="middle" fill="#f59e0b" font-size="9" font-family="sans-serif">全文搜索/日志分析？</text>
+  <rect x="20" y="105" width="180" height="28" rx="6" fill="rgba(245,158,11,0.15)" stroke="#f59e0b" stroke-width="2"/>
+  <text x="110" y="123" text-anchor="middle" fill="#f59e0b" font-size="10" font-weight="bold" font-family="sans-serif">→ Elasticsearch</text>
+  <rect x="275" y="72" width="200" height="30" rx="6" fill="#1c2130" stroke="#34d399"/>
+  <text x="375" y="91" text-anchor="middle" fill="#34d399" font-size="9" font-family="sans-serif">灵活Schema + 高写入？</text>
+  <rect x="275" y="112" width="200" height="28" rx="6" fill="rgba(52,211,153,0.12)" stroke="#34d399" stroke-width="2"/>
+  <text x="375" y="130" text-anchor="middle" fill="#34d399" font-size="10" font-weight="bold" font-family="sans-serif">→ MongoDB</text>
+  <rect x="550" y="65" width="180" height="30" rx="6" fill="#1c2130" stroke="#3b82f6"/>
+  <text x="640" y="84" text-anchor="middle" fill="#3b82f6" font-size="9" font-family="sans-serif">复杂事务/强一致？</text>
+  <rect x="550" y="105" width="180" height="28" rx="6" fill="rgba(59,130,246,0.12)" stroke="#3b82f6" stroke-width="2"/>
+  <text x="640" y="123" text-anchor="middle" fill="#3b82f6" font-size="10" font-weight="bold" font-family="sans-serif">→ MySQL/PostgreSQL</text>
+  <text x="375" y="170" text-anchor="middle" fill="#64748b" font-size="10" font-family="sans-serif">—— 进阶组合场景 ——</text>
+  <rect x="30" y="185" width="210" height="60" rx="8" fill="#0d1117" stroke="#2a3344"/>
+  <text x="135" y="205" text-anchor="middle" fill="#f87171" font-size="9" font-weight="bold" font-family="sans-serif">搜索 + 主数据存储</text>
+  <text x="135" y="222" text-anchor="middle" fill="#e2e8f0" font-size="8" font-family="sans-serif">MySQL/MongoDB为主存储</text>
+  <text x="135" y="237" text-anchor="middle" fill="#e2e8f0" font-size="8" font-family="sans-serif">+ ES作为搜索副本(CDC同步)</text>
+  <rect x="270" y="185" width="210" height="60" rx="8" fill="#0d1117" stroke="#2a3344"/>
+  <text x="375" y="205" text-anchor="middle" fill="#f87171" font-size="9" font-weight="bold" font-family="sans-serif">IoT / 时序数据</text>
+  <text x="375" y="222" text-anchor="middle" fill="#e2e8f0" font-size="8" font-family="sans-serif">MongoDB Time Series Collection</text>
+  <text x="375" y="237" text-anchor="middle" fill="#e2e8f0" font-size="8" font-family="sans-serif">或 TimescaleDB / InfluxDB</text>
+  <rect x="510" y="185" width="210" height="60" rx="8" fill="#0d1117" stroke="#2a3344"/>
+  <text x="615" y="205" text-anchor="middle" fill="#f87171" font-size="9" font-weight="bold" font-family="sans-serif">实时推荐 / 内容平台</text>
+  <text x="615" y="222" text-anchor="middle" fill="#e2e8f0" font-size="8" font-family="sans-serif">MongoDB存储用户行为和内容</text>
+  <text x="615" y="237" text-anchor="middle" fill="#e2e8f0" font-size="8" font-family="sans-serif">+ ES提供搜索和聚合</text>
+  <rect x="80" y="270" width="590" height="140" rx="10" fill="rgba(248,113,113,0.04)" stroke="#f87171" stroke-width="1"/>
+  <text x="375" y="293" text-anchor="middle" fill="#f87171" font-size="11" font-weight="bold" font-family="sans-serif">反模式警告</text>
+  <text x="110" y="316" fill="#e2e8f0" font-size="9" font-family="sans-serif">1. 用ES当主数据库 → 无事务，更新开销大</text>
+  <text x="110" y="336" fill="#e2e8f0" font-size="9" font-family="sans-serif">2. 用MongoDB做复杂关联 → $lookup远不如SQL JOIN</text>
+  <text x="110" y="356" fill="#e2e8f0" font-size="9" font-family="sans-serif">3. 用MySQL做全文搜索 → LIKE无法走索引</text>
+  <text x="110" y="376" fill="#e2e8f0" font-size="9" font-family="sans-serif">4. MongoDB单文档塞太多数据 → 超几百KB性能恶化</text>
+  <text x="110" y="396" fill="#e2e8f0" font-size="9" font-family="sans-serif">5. ES深度分页(from+size>10000) → 必须search_after+PIT</text>
+</svg>
+</div>
+</div>
+
+<div id="ch7-2">
+<h3>7.2 典型架构方案</h3>
+
+<h4>场景一：电商商品搜索</h4>
+<pre><code>// 架构：MySQL(交易) + MongoDB(商品详情) + ES(搜索)
+// 同步：Debezium(Binlog CDC) + MongoDB Kafka Connector(Change Stream) → Kafka → ES
+
+// ES 8.x Java Client (co.elastic.clients:elasticsearch-java)
+@Service
+public class ProductSearchService {
+    @Autowired private ElasticsearchClient esClient;
+
+    public SearchResult search(ProductSearchRequest req) {
+        SearchResponse&lt;Product&gt; response = esClient.search(s -> s
+            .index("products")
+            .query(q -> q.bool(b -> {
+                if (StringUtils.isNotBlank(req.getKeyword())) {
+                    b.must(m -> m.multiMatch(mm -> mm
+                        .fields("title^3", "description", "brand^2")
+                        .query(req.getKeyword())
+                        .type(TextQueryType.BestFields)));
+                }
+                if (req.getBrand() != null)
+                    b.filter(f -> f.term(t -> t.field("brand").value(req.getBrand())));
+                if (req.getMinPrice() != null)
+                    b.filter(f -> f.range(r -> r.number(n ->
+                        n.field("price").gte(req.getMinPrice().doubleValue()))));
+                return b;
+            }))
+            .from(req.getPage() * req.getSize()).size(req.getSize())
+            .aggregations("brands", a -> a.terms(t -> t.field("brand").size(20))),
+            Product.class);
+        return parseResponse(response);
+    }
+}
+// 注意：RestHighLevelClient 已在 ES 8.x 中移除，必须使用新版 Java Client</code></pre>
+
+<h4>场景二：社交内容平台(MongoDB为主)</h4>
+<pre><code>// Schema设计 —— 帖子文档
+{
+  "_id": ObjectId("..."),
+  "author": { "id": "user_001", "name": "张三", "avatar": "..." }, // 冗余基础信息
+  "content": "今天学习了MongoDB的Schema设计...",
+  "tags": ["MongoDB", "数据库"],
+  "stats": { "likes": 128, "comments": 42 },       // 原子递增
+  "top_comments": [                                  // 嵌入热门前3条
+    { "user": "李四", "text": "讲得好！", "likes": 23 }
+  ],
+  "created_at": ISODate("2024-03-15T10:00:00Z")
+}
+// 设计要点：
+// 冗余author → 读帖子不需$lookup
+// 嵌入top_comments → Feed流一次查询
+// stats用$inc原子递增 → 高并发安全
+// 完整评论独立集合 → 避免文档过大</code></pre>
+
+<h4>场景三：日志平台(ELK)</h4>
+<pre><code>// 方案一：ILM 生命周期策略（复杂场景）
+PUT _ilm/policy/logs-policy
+{ "policy": { "phases": {
+    "hot":    { "actions": { "rollover": { "max_size":"50GB", "max_age":"1d" }}},
+    "warm":   { "min_age":"7d", "actions": { "shrink": {"number_of_shards":1}, "forcemerge": {"max_num_segments":1}}},
+    "cold":   { "min_age":"30d", "actions": { "allocate": {"require":{"data":"cold"}}}},
+    "delete": { "min_age":"90d", "actions": { "delete": {} }}
+}}}
+
+// 方案二：ES 8.x Data Stream Lifecycle（简化版，推荐新项目使用）
+PUT _data_stream/logs-app/_lifecycle
+{ "data_retention": "90d" }
+// 自动管理 rollover + 过期删除，无需复杂 ILM 配置</code></pre>
+</div>
+
+<div id="ch7-3">
+<h3>7.3 面试高频问题</h3>
+
+<div class="qa-block">
+<div class="qa-question"><p>Q1: MongoDB和MySQL最本质的区别？什么场景该用MongoDB？</p></div>
+<div class="qa-answer"><p>本质是<strong>数据模型</strong>：MySQL范式化(表+JOIN)，MongoDB反范式化(嵌套JSON自包含)。选MongoDB的信号：Schema频繁变更、数据天然层级结构、需要高数据局部性（一次IO读取完整实体）、不需复杂JOIN和强事务。MongoDB 同样擅长高写入场景（WiredTiger Journal + 内存B-Tree更新）。</p></div>
+</div>
+
+<div class="qa-block">
+<div class="qa-question"><p>Q2: ES倒排索引和MySQL B+Tree本质区别？</p></div>
+<div class="qa-answer"><p>方向不同：B+Tree是"主键→数据"映射，适合精确定位；倒排是"词→文档列表"映射，适合"包含某词的文档有哪些"。B+Tree解决"知道ID找数据"，倒排解决"知道内容找文档"。ES同时维护倒排(搜索)+Doc Values(排序聚合)+Stored Fields(原始数据)覆盖不同访问模式。</p></div>
+</div>
+
+<div class="qa-block">
+<div class="qa-question"><p>Q3: MongoDB如何保证高可用？节点挂了会怎样？</p></div>
+<div class="qa-answer"><p>副本集机制：Primary挂→10秒内选新Primary(期间写不可用)；Secondary挂→不影响但降低冗余；多数节点挂→只读。关键：writeConcern:majority保证数据不因切换丢失。</p></div>
+</div>
+
+<div class="qa-block">
+<div class="qa-question"><p>Q4: ES集群Red状态怎么排查？</p></div>
+<div class="qa-answer"><p>Red=有主分片未分配。步骤：1) <code>_cluster/health</code>确认哪些索引；2) <code>_cat/shards</code>找原因；3) 常见：磁盘超95%水位线→清理；节点丢失→等恢复或接受丢失；4) <code>_cluster/allocation/explain</code>看详细原因。</p></div>
+</div>
+
+<div class="qa-block">
+<div class="qa-question"><p>Q5: MongoDB和ES数据一致性怎么保证？</p></div>
+<div class="qa-answer"><p>MongoDB Change Stream → Kafka → ES Consumer（推荐用 Debezium 或 MongoDB 官方 Kafka Connector）。保证：Kafka offset保证at-least-once；ES端通过_id幂等写入避免重复；强一致场景搜索结果再走主库确认。延迟窗口通常秒级。2026新选择：如果搜索需求不复杂，可直接使用 MongoDB Atlas Search 避免双写问题。</p></div>
+</div>
+
+<div class="qa-block">
+<div class="qa-question"><p>Q6: ObjectId怎么生成？为什么不用自增ID？</p></div>
+<div class="qa-answer"><p>12字节：4字节时间戳+5字节随机值+3字节递增计数器。不用自增原因：1)分布式需集中协调(瓶颈)；2)ObjectId客户端直接生成无需询问服务端；3)自增ID导致B-Tree最右叶节点写入热点。</p></div>
+</div>
+
+<div class="qa-block">
+<div class="qa-question"><p>Q7: ES分词器了解多少？中文怎么做？</p></div>
+<div class="qa-answer"><p>内置：standard/simple/whitespace/keyword。中文用IK插件：ik_smart(粗粒度)、ik_max_word(细粒度)。生产建议：索引时ik_max_word(保证召回)，搜索时ik_smart(提高精确)。可配自定义词典处理业务词汇。</p></div>
+</div>
+
+<div class="qa-block">
+<div class="qa-question"><p>Q8: MongoDB大数据量分页怎么处理？</p></div>
+<div class="qa-answer"><p>三种：1) skip+limit(简单但性能随offset线性下降)；2) 基于游标分页(推荐)：用上一页末尾sort值做下一页起点<code>find({created_at:{$lt:lastDate}}).sort({created_at:-1}).limit(20)</code>，O(logN)；3) Bucket Pattern预计算。</p></div>
+</div>
+
+<div class="qa-block">
+<div class="qa-question"><p>Q9: ES Segment Merge有什么问题？怎么优化？</p></div>
+<div class="qa-answer"><p>问题：IO/CPU密集影响搜索写入；需额外磁盘空间。优化：1)只读索引forcemerge到1个Segment；2)批量写入时增大refresh_interval；3)调整max_merged_segment控制大小；4)用SSD；5)ILM让warm/cold阶段完成merge后不再变。</p></div>
+</div>
+
+<div class="qa-block">
+<div class="qa-question"><p>Q10: 设计百万商品搜索系统的技术方案？</p></div>
+<div class="qa-answer"><p>分层：数据层(MySQL交易+MongoDB商品+ES搜索) → 同步层(Debezium+MongoDB Kafka Connector→Kafka→ES) → ES设计(按类目分索引,3-5主分片,text搜索+keyword过滤) → 搜索服务(BoolQuery+FilterCache+kNN混合搜索) → 优化(纠错+同义词+FunctionScore+预热) → 降级(ES不可用时降级到MongoDB Atlas Search保证基础搜索)。2026加分项：向量语义搜索补充关键词搜索，用 RRF 融合排序。</p></div>
+</div>
+</div>
+
+</section>
+
+<div class="page-footer">
+  <p>文档型数据库面试指南 · 以 Kleppmann (DDIA) 视角系统解构 · 支持深浅主题切换</p>
+</div>
+
+</main>
+</div>
+
+<button class="back-to-top" aria-label="回到顶部">&uarr;</button>
+<script src="./shared/script.js"></script>
+</body>
+</html>
