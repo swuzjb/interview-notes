@@ -35,6 +35,12 @@
   </div>
   <nav class="sidebar-nav">
     <div class="nav-group">
+      <a href="#intro-guide" class="nav-group-title">入门导读</a>
+      <div class="nav-items">
+        <a href="#intro-guide">30秒理解分布式</a>
+      </div>
+    </div>
+    <div class="nav-group">
       <a href="#chapter1" class="nav-group-title">CAP定理 &amp; BASE理论</a>
       <div class="nav-items">
         <a href="#cap-theorem">CAP三选二</a>
@@ -87,6 +93,63 @@
   <p class="author">覆盖 2PC / TCC / SAGA / 本地消息表 · 幂等五层防线 · 一致性哈希与虚拟节点</p>
 </div>
 
+<!-- ============================== 入门导读 ============================== -->
+<section class="chapter" id="intro-guide">
+<div class="chapter-header">
+  <span class="chapter-number">导读</span>
+  <h2>30秒理解分布式系统</h2>
+</div>
+
+<div class="callout tip">
+  <p><strong>什么是分布式系统？一句话：</strong>把原本一台电脑干的活，分给多台电脑一起干。</p>
+</div>
+
+<div class="chapter-intro">
+  <strong>为什么需要分布式？</strong>想象你开了一家火锅店：
+</div>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    从火锅店理解分布式系统
+  </div>
+  <pre><code><span class="cmt">// 单机时代 = 一个厨师</span>
+一个厨师做所有菜 → 客人少时没问题
+客人多了 → 厨师忙不过来 → 客人等太久走了
+
+<span class="cmt">// 分布式 = 多个厨师分工合作</span>
+火锅底料组（专做底料）  → 对应「微服务 A」
+切菜组（专管食材）      → 对应「微服务 B」
+上菜组（专管送餐）      → 对应「微服务 C」
+
+<span class="cmt">// 分布式带来的新问题</span>
+1. 切菜组切好了，但火锅底料组还没做好 → <span class="str">「一致性问题」</span>
+2. 切菜组的师傅突然请假了 → <span class="str">「可用性问题」</span>
+3. 切菜组和底料组之间的传菜窗口堵了 → <span class="str">「网络分区问题」</span>
+4. 客人点了两次同样的菜，怎么保证只做一份？ → <span class="str">「幂等问题」</span>
+5. 新来的菜分给哪个厨师？ → <span class="str">「数据分片/一致性哈希」</span></code></pre>
+</div>
+
+<div class="callout warn">
+  <p><strong>本指南的核心目标：</strong>分布式系统就是在解决「多台机器一起干活时产生的协调问题」。本文覆盖的所有知识点（CAP、分布式事务、幂等、一致性哈希）本质上都是对上述问题的不同维度的解答。</p>
+</div>
+
+<div class="table-wrapper">
+  <table>
+    <thead>
+      <tr><th>章节</th><th>解决什么问题</th><th>生活类比</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>CAP/BASE</strong></td><td>多台机器之间数据不一致怎么办？</td><td>多家银行分行之间同步余额</td></tr>
+      <tr><td><strong>分布式事务</strong></td><td>跨多台机器的操作如何保证"全部成功或全部失败"？</td><td>跨行转账，要么都成功要么都回滚</td></tr>
+      <tr><td><strong>幂等设计</strong></td><td>同一个操作被重复执行了怎么办？</td><td>按电梯按钮多次，只来一次电梯</td></tr>
+      <tr><td><strong>一致性哈希</strong></td><td>数据该存在哪台机器上？机器增减时怎么办？</td><td>新学期图书馆加了一排书架，怎么少搬书</td></tr>
+    </tbody>
+  </table>
+</div>
+
+</section>
+
 <!-- ============================== CHAPTER 1 ============================== -->
 <section class="chapter" id="chapter1">
 <div class="chapter-header">
@@ -96,6 +159,35 @@
 
 <div class="chapter-intro">
   <strong>面试核心：</strong>分布式系统的基石理论。CAP 定理告诉我们在分布式环境下不可能同时满足一致性(C)、可用性(A)、分区容错性(P)三者，而 BASE 理论则是对 CAP 中 AP 方向的延伸实践。理解这些理论是回答所有分布式问题的前提。
+</div>
+
+<div class="callout tip">
+  <p><strong>先用生活例子理解 CAP：</strong>想象你在两个城市各有一张银行卡（同一账户），账户里有 1000 元。</p>
+</div>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    用银行存款理解 CAP
+  </div>
+  <pre><code><span class="cmt">// 场景：你在北京和上海各有一个 ATM 可以操作同一账户（余额 1000 元）</span>
+<span class="cmt">// 这时候北京和上海之间的网络断了（= 网络分区 P 发生了）</span>
+
+<span class="cmt">// === 选择 CP（保一致性，牺牲可用性）===</span>
+你在北京 ATM 取 500 → 成功，余额 500
+你老婆在上海 ATM 查余额 → <span class="str">「系统提示：暂时无法服务，请稍后再试」</span>
+<span class="cmt">// 为什么？因为上海还不知道你取了钱，为了不给错误信息，直接拒绝服务</span>
+<span class="cmt">// 结果：数据一定是对的，但可能暂时用不了</span>
+
+<span class="cmt">// === 选择 AP（保可用性，牺牲一致性）===</span>
+你在北京 ATM 取 500 → 成功，余额 500
+你老婆在上海 ATM 查余额 → <span class="str">「显示余额 1000 元」</span>（旧数据！）
+<span class="cmt">// 为什么？上海为了能正常服务，用的是本地的旧数据</span>
+<span class="cmt">// 结果：随时能用，但可能看到过时的信息</span>
+
+<span class="cmt">// === 关键认知 ===</span>
+<span class="cmt">// 网络分区（P）是物理现实，你无法避免光纤被挖断</span>
+<span class="cmt">// 所以真正的选择是：网络出问题时，你要「数据正确」还是「系统能用」？</span></code></pre>
 </div>
 
 <h3 id="cap-theorem">CAP 三选二的本质</h3>
@@ -178,6 +270,14 @@
 
 <h3 id="base-theory">BASE 理论</h3>
 
+<div class="callout tip">
+  <p><strong>生活类比：</strong>你在淘宝买了一件商品，付款成功后：<br>
+  - 你的订单立刻显示「待发货」（<strong>基本可用</strong> - 不用等物流系统准备好你就能看到订单）<br>
+  - 卖家那边可能几秒后才收到通知（<strong>软状态</strong> - 中间有个"买家付了钱但卖家还不知道"的短暂状态）<br>
+  - 几秒后卖家也看到了「新订单」（<strong>最终一致</strong> - 最终双方数据都对了）<br><br>
+  对比 ACID：如果用强一致性，你付款时系统要等卖家确认收到通知后才告诉你「付款成功」，体验很差。</p>
+</div>
+
 <p>BASE 是对 CAP 中 AP 方向的延伸，是大规模互联网系统的实践指导：</p>
 
 <ul>
@@ -224,8 +324,47 @@ BASE: 乐观策略，优先保证可用性，异步修复一致性</code></pre>
   <strong>面试地位：</strong>分布式事务是面试最高频的考点之一。需要掌握 2PC、TCC、SAGA、本地消息表四种方案的原理、优缺点、适用场景，并能结合业务场景深入展开。
 </div>
 
+<div class="callout tip">
+  <p><strong>先用生活例子理解「分布式事务」到底在解决什么问题：</strong></p>
+</div>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    用聚餐 AA 理解分布式事务
+  </div>
+  <pre><code><span class="cmt">// 场景：3个人聚餐，约定 AA 制，每人转 100 元给餐厅</span>
+
+<span class="cmt">// 单机事务（传统数据库）= 一个人替大家付，然后收钱</span>
+小明直接付 300，然后找小红和小李各要 100 → 简单！
+<span class="cmt">// 但如果小红没钱呢？小明自己亏了</span>
+
+<span class="cmt">// 分布式事务 = 三个人各自从自己银行转账</span>
+问题来了：
+- 小明转了 100 ✓
+- 小红转了 100 ✓
+- 小李的银行系统崩了 ✗
+
+<span class="cmt">// 这时候怎么办？</span>
+<span class="cmt">// 选项A: 让小明和小红的钱也退回来（全部回滚）→ 这就是「2PC」的思路</span>
+<span class="cmt">// 选项B: 先冻结每人100，都OK再真正扣 → 这就是「TCC」的思路</span>
+<span class="cmt">// 选项C: 已经转的不退，小李那份之后再想办法补 → 这就是「SAGA」的思路</span>
+<span class="cmt">// 选项D: 每人把钱先放桌上，服务员一个个收 → 这就是「本地消息表」的思路</span>
+
+<span class="cmt">// 核心问题：多个独立参与者的操作，如何保证「要么全成功，要么全失败」</span></code></pre>
+</div>
+
 <!-- ===== 2PC ===== -->
 <h3 id="two-phase-commit">2PC (Two-Phase Commit) 两阶段提交</h3>
+
+<div class="callout tip">
+  <p><strong>生活类比 — 婚礼上牧师的确认流程：</strong></p>
+  <p>牧师（协调者）问新郎：「你愿意吗？」→ 新郎：「我愿意」<br>
+  牧师（协调者）问新娘：「你愿意吗？」→ 新娘：「我愿意」<br>
+  牧师：「好，我宣布你们结为夫妻！」（Commit）<br><br>
+  如果新娘说「我不愿意」→ 牧师：「婚礼取消！」（Rollback）<br>
+  如果牧师问完新郎后<strong>突然晕倒了</strong> → 新娘不知道该不该说"我愿意"，全场<strong>卡住了</strong>（= 协调者单点故障）</p>
+</div>
 
 <h4>核心流程</h4>
 <p>2PC 由一个<strong>协调者 (Coordinator)</strong> 和多个<strong>参与者 (Participant)</strong> 组成：</p>
@@ -332,6 +471,14 @@ BASE: 乐观策略，优先保证可用性，异步修复一致性</code></pre>
 
 <!-- ===== TCC ===== -->
 <h3 id="tcc">TCC (Try-Confirm-Cancel) 模式</h3>
+
+<div class="callout tip">
+  <p><strong>生活类比 — 网购「加入购物车 → 下单 → 付款」：</strong></p>
+  <p><strong>Try（预留）</strong>：你在京东点了「立即购买」，库存显示从10变成9，但这件商品被标记为「占用中」，还没真正从仓库发出。<br>
+  <strong>Confirm（确认）</strong>：你完成支付，商品正式发货，库存真正减少。<br>
+  <strong>Cancel（取消）</strong>：你30分钟没付款，系统自动取消订单，库存从9恢复为10。<br><br>
+  关键区别：Try 阶段不是真扣，而是「先占着」，只有 Confirm 才真正生效。这样即使你最终不买，东西也能自动恢复。</p>
+</div>
 
 <h4>核心思想</h4>
 <p>TCC 将事务分为三个阶段，本质是<strong>应用层的两阶段提交</strong>——把数据库层面的锁和准备操作上升到业务层面：</p>
@@ -521,6 +668,15 @@ BASE: 乐观策略，优先保证可用性，异步修复一致性</code></pre>
 <!-- ===== SAGA ===== -->
 <h3 id="saga">SAGA 模式</h3>
 
+<div class="callout tip">
+  <p><strong>生活类比 — 规划一次出国旅行：</strong></p>
+  <p>你要规划：①订机票 → ②订酒店 → ③订景点门票 → ④租车<br><br>
+  每一步都是「做了就生效」的（不像 TCC 有预留），如果第③步「门票售罄」失败了：<br>
+  → 退酒店（补偿 C2）→ 退机票（补偿 C1）<br><br>
+  <strong>SAGA 的特点：</strong>每一步都是真正执行了的，失败时需要「反向一步步撤销」。<br>
+  <strong>和 TCC 的区别：</strong>TCC 是「先冻结再确认」，中间状态对外不可见；SAGA 是「每步直接执行」，中间状态是可见的（你已经订了机票和酒店，别人能看到）。</p>
+</div>
+
 <h4>核心思想</h4>
 <p>SAGA 将长事务拆分为一系列本地事务 T1, T2, ... Tn，每个本地事务 Ti 都有一个对应的补偿事务 Ci。如果 Tk 失败，则依次执行 Ck-1, Ck-2, ... C1 进行反向补偿。</p>
 
@@ -585,6 +741,16 @@ BASE: 乐观策略，优先保证可用性，异步修复一致性</code></pre>
 
 <!-- ===== 本地消息表 ===== -->
 <h3 id="local-msg-table">本地消息表 + 可靠消息</h3>
+
+<div class="callout tip">
+  <p><strong>生活类比 — 快递寄件：</strong></p>
+  <p>你要寄一个快递（= 发一条消息给下游服务），但快递员可能漏收：<br>
+  ① 你先在自己的<strong>记事本上写下「要寄快递给张三」</strong>（= 写本地消息表，跟业务操作在同一事务）<br>
+  ② 然后去门口等快递员来收（= 定时扫描，尝试发送消息到 MQ）<br>
+  ③ 快递员收走了，你在记事本上<strong>打个勾</strong>（= 标记已发送）<br>
+  ④ 如果快递员没来，你过5分钟再去门口等一次（= 重试）<br><br>
+  <strong>核心保证</strong>：只要你记事本上写了，这个快递迟早会寄出去。不会出现"业务做了但消息丢了"的情况。</p>
+</div>
 
 <h4>核心流程（4步）</h4>
 
@@ -688,6 +854,37 @@ BASE: 乐观策略，优先保证可用性，异步修复一致性</code></pre>
 
 <div class="chapter-intro">
   <strong>面试价值：</strong>幂等是分布式系统的基础设施保障。网络重试、消息重复、用户双击都会导致操作重复执行。一个缺乏幂等保护的系统在分布式环境下几乎不可能正确工作。
+</div>
+
+<div class="callout tip">
+  <p><strong>先用三个生活例子秒懂「幂等」：</strong></p>
+</div>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    三个例子理解幂等性
+  </div>
+  <pre><code><span class="cmt">// 什么是幂等？同一个操作执行 1 次和执行 N 次，效果完全相同</span>
+
+<span class="cmt">// ✓ 天然幂等的操作：</span>
+电梯按钮：按 1 次亮了，狂按 10 次还是亮的，电梯只来一次
+设置空调温度为 26°C：设 1 次和设 100 次，结果都是 26°C
+查询余额：查 1 次和查 100 次，余额不会变
+
+<span class="cmt">// ✗ 非幂等的操作（有危险！）：</span>
+ATM 取款：按 1 次取 100，按 2 次就取了 200！
+给账户充值：充 1 次 +100，重试 1 次就变成 +200！
+发送短信通知：发 1 次用户收到 1 条，重试 3 次用户收到 4 条！
+
+<span class="cmt">// 为什么分布式系统必须考虑幂等？</span>
+因为网络是不可靠的：
+1. 你发了请求，服务器收到并处理了，但响应丢了 → 你以为失败了，<span class="str">又发一次</span>
+2. 消息队列投递后消费者处理完了，但 ACK 丢了 → MQ 以为没处理，<span class="str">又投一次</span>
+3. 用户网络慢，以为没点到，<span class="str">连点三下</span>「付款」按钮
+
+<span class="cmt">// 解决思路：给每个操作一个唯一 ID，服务端记住处理过的 ID</span>
+<span class="cmt">// 第二次收到相同 ID → 直接返回上次结果，不再执行</span></code></pre>
 </div>
 
 <h3 id="idempotent-schemes">五种幂等方案对比</h3>
@@ -924,6 +1121,39 @@ BASE: 乐观策略，优先保证可用性，异步修复一致性</code></pre>
   <strong>面试价值：</strong>一致性哈希是分布式系统数据分片的基础算法。理解哈希环、虚拟节点、数据迁移量等核心概念，是回答缓存集群、分布式存储相关问题的基础。
 </div>
 
+<div class="callout tip">
+  <p><strong>先用生活例子秒懂「一致性哈希解决了什么」：</strong></p>
+</div>
+
+<div class="code-block">
+  <div class="code-header">
+    <div class="code-dots"><span></span><span></span><span></span></div>
+    用学校储物柜理解一致性哈希
+  </div>
+  <pre><code><span class="cmt">// 场景：学校有 3 排储物柜（= 3 台服务器），100 个学生需要分配柜子</span>
+
+<span class="cmt">// === 传统取模方案 ===</span>
+规则：学号 % 3 = 0 去A排，= 1 去B排，= 2 去C排
+学号 7 → 7%3=1 → B排
+学号 15 → 15%3=0 → A排
+<span class="str">问题：新学期加了一排柜子（变成4排），规则变成 学号%4</span>
+学号 7 → 7%4=3 → D排（原来在B排，要搬！）
+学号 15 → 15%4=3 → D排（原来在A排，要搬！）
+<span class="cmt">// 几乎所有人都要重新搬柜子！大混乱！</span>
+
+<span class="cmt">// === 一致性哈希方案 ===</span>
+想象所有柜子排成一个圆环
+规则：每个学生站在圆环上（按学号哈希），<span class="str">顺时针走到最近的柜排就是你的</span>
+
+新加了 D 排柜子插在 B 和 C 之间：
+→ 只有原来「B→C这段弧」上的学生需要换到 D
+→ 其他人完全不受影响！
+<span class="cmt">// 只有约 1/4 的人需要搬，而不是全部重新来！</span>
+
+<span class="cmt">// 这就是一致性哈希的核心价值：</span>
+<span class="cmt">// 服务器增减时，只影响一小部分数据，而不是全部重新分配</span></code></pre>
+</div>
+
 <h3 id="hash-ring">哈希环原理</h3>
 
 <h4>传统哈希取模的问题</h4>
@@ -1021,6 +1251,12 @@ hash(<span class="str">"userC"</span>) = <span class="num">15</span> → 15 % 3 
 </div>
 
 <h3 id="virtual-nodes">虚拟节点解决数据倾斜</h3>
+
+<div class="callout tip">
+  <p><strong>生活类比：</strong>学校只有3排储物柜，如果恰好三排都挤在圆环的同一侧，那另一侧的同学都要跑很远。<br>
+  <strong>解决方法</strong>：把每排柜子拆成「50个小标签」分散贴在圆环各处。比如 A 排 → A-1, A-2, A-3...A-50，均匀分散在圆环上。<br>
+  学生找到最近的标签，看它属于哪排，就去哪排存东西。标签越多，分布越均匀，每排分到的学生数量就越接近。</p>
+</div>
 
 <h4>问题：节点少时数据分布不均</h4>
 <p>当物理节点少时（如3-5个），哈希环上节点分布可能非常不均匀，导致某些节点承载了绝大部分数据。</p>
