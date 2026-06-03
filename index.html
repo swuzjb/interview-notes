@@ -2,14 +2,27 @@
 <html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>八股文学习资料</title>
   <link rel="stylesheet" href="./shared/style.css">
   <style>
-    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 2rem; }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 2rem;
+      padding: 2rem calc(1rem + env(safe-area-inset-right, 0px)) 2rem calc(1rem + env(safe-area-inset-left, 0px));
+    }
     .index-container { max-width: 720px; width: 100%; }
     .index-hero { text-align: center; margin-bottom: 3rem; }
-    .index-hero h1 { font-family: var(--font-heading); font-size: clamp(2rem, 5vw, 2.8rem); font-weight: 800; margin-bottom: 0.6rem; color: var(--text-primary); }
+    .index-hero h1 {
+      font-family: var(--font-heading);
+      font-size: clamp(2rem, 5vw, 2.8rem);
+      font-weight: 800;
+      margin-bottom: 0.6rem;
+      color: var(--text-primary);
+    }
     .index-hero p { color: var(--text-secondary); font-size: 0.95rem; line-height: 1.7; }
     .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.2rem; }
     .guide-card {
@@ -20,12 +33,17 @@
       text-decoration: none;
       transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
       display: block;
+      -webkit-tap-highlight-color: transparent;
     }
     .guide-card:hover {
       transform: translateY(-3px);
       box-shadow: 0 12px 40px rgba(0,0,0,0.2);
       border-color: var(--accent);
       text-decoration: none;
+    }
+    .guide-card:active {
+      transform: scale(0.98);
+      transition: transform 0.1s;
     }
     .card-icon { font-size: 2rem; margin-bottom: 0.8rem; display: block; }
     .card-title { font-size: 1.15rem; font-weight: 700; color: var(--text-primary); margin-bottom: 0.4rem; }
@@ -41,10 +59,29 @@
       font-weight: 600;
     }
     .index-footer { text-align: center; margin-top: 3rem; color: var(--text-muted); font-size: 0.78rem; }
-    @media (max-width: 480px) {
-      body { padding: 1.5rem 1rem; }
-      .card-grid { grid-template-columns: 1fr; }
-      .guide-card { padding: 1.5rem; }
+
+    @media (max-width: 768px) {
+      body {
+        padding: calc(1.5rem + env(safe-area-inset-top, 0px)) 1.2rem calc(1.5rem + env(safe-area-inset-bottom, 0px));
+        align-items: flex-start;
+      }
+      .index-hero { margin-bottom: 2rem; }
+      .index-hero h1 { font-size: 1.7rem; }
+      .index-hero p { font-size: 0.9rem; line-height: 1.8; }
+      .card-grid { grid-template-columns: 1fr; gap: 1rem; }
+      .guide-card { padding: 1.5rem 1.4rem; border-radius: 10px; }
+      .card-icon { font-size: 1.8rem; margin-bottom: 0.6rem; }
+      .card-title { font-size: 1.1rem; }
+      .card-desc { font-size: 0.85rem; line-height: 1.7; }
+      .card-tags { margin-top: 0.5rem; }
+      .card-tag { font-size: 0.7rem; padding: 3px 9px; }
+      .index-footer { margin-top: 2rem; }
+      .theme-toggle { top: calc(0.75rem + env(safe-area-inset-top, 0px)); right: calc(0.75rem + env(safe-area-inset-right, 0px)); }
+    }
+
+    @media (max-width: 380px) {
+      body { padding-left: 0.8rem; padding-right: 0.8rem; }
+      .guide-card { padding: 1.3rem 1.1rem; }
     }
   </style>
 </head>

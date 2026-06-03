@@ -1,5 +1,6 @@
 /* ============================================================
    八股文统一交互脚本 - Unified Interview Guide Scripts
+   Enhanced for Mobile Reading Experience
    ============================================================ */
 
 (function () {
@@ -7,80 +8,169 @@
 
   // === Theme Toggle ===
   function initTheme() {
-    const saved = localStorage.getItem('bagu-theme');
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const theme = saved || (prefersDark ? 'dark' : 'dark'); // default dark
+    var saved = localStorage.getItem('bagu-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var theme = saved || (prefersDark ? 'dark' : 'dark'); // default dark
     document.documentElement.setAttribute('data-theme', theme);
     updateThemeIcon(theme);
   }
 
   function toggleTheme() {
-    const current = document.documentElement.getAttribute('data-theme');
-    const next = current === 'dark' ? 'light' : 'dark';
+    var current = document.documentElement.getAttribute('data-theme');
+    var next = current === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', next);
     localStorage.setItem('bagu-theme', next);
     updateThemeIcon(next);
   }
 
   function updateThemeIcon(theme) {
-    const btn = document.querySelector('.theme-toggle');
+    var btn = document.querySelector('.theme-toggle');
     if (btn) {
       btn.innerHTML = theme === 'dark' ? '&#9788;' : '&#9790;';
       btn.title = theme === 'dark' ? '切换为浅色模式' : '切换为深色模式';
     }
   }
 
-  // === Mobile Sidebar ===
+  // === Font Size Control ===
+  function initFontSize() {
+    var saved = localStorage.getItem('bagu-font-scale');
+    if (saved) {
+      document.documentElement.style.setProperty('--font-scale', saved);
+    }
+  }
+
+  function changeFontSize(delta) {
+    var current = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--font-scale')) || 1;
+    var next = Math.min(1.3, Math.max(0.85, current + delta));
+    document.documentElement.style.setProperty('--font-scale', next);
+    localStorage.setItem('bagu-font-scale', next);
+  }
+
+  function initFontSizeControls() {
+    var control = document.querySelector('.font-size-control');
+    if (!control) return;
+
+    var btnSmaller = control.querySelector('[data-action="smaller"]');
+    var btnLarger = control.querySelector('[data-action="larger"]');
+
+    if (btnSmaller) {
+      btnSmaller.addEventListener('click', function (e) {
+        e.preventDefault();
+        changeFontSize(-0.05);
+      });
+    }
+
+    if (btnLarger) {
+      btnLarger.addEventListener('click', function (e) {
+        e.preventDefault();
+        changeFontSize(0.05);
+      });
+    }
+  }
+
+  // === Mobile Sidebar with Swipe Gesture ===
   function initMobileMenu() {
-    const btn = document.querySelector('.mobile-menu-btn');
-    const sidebar = document.querySelector('.sidebar');
-    const overlay = document.querySelector('.sidebar-overlay');
+    var btn = document.querySelector('.mobile-menu-btn');
+    var sidebar = document.querySelector('.sidebar');
+    var overlay = document.querySelector('.sidebar-overlay');
 
     if (!btn || !sidebar) return;
 
+    function openSidebar() {
+      sidebar.classList.add('open');
+      if (overlay) overlay.classList.add('open');
+      btn.innerHTML = '&#10005;';
+      // Prevent body scroll when sidebar is open
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeSidebar() {
+      sidebar.classList.remove('open');
+      if (overlay) overlay.classList.remove('open');
+      btn.innerHTML = '&#9776;';
+      document.body.style.overflow = '';
+    }
+
     btn.addEventListener('click', function () {
-      sidebar.classList.toggle('open');
-      if (overlay) overlay.classList.toggle('open');
-      btn.innerHTML = sidebar.classList.contains('open') ? '&#10005;' : '&#9776;';
+      if (sidebar.classList.contains('open')) {
+        closeSidebar();
+      } else {
+        openSidebar();
+      }
     });
 
     if (overlay) {
-      overlay.addEventListener('click', function () {
-        sidebar.classList.remove('open');
-        overlay.classList.remove('open');
-        btn.innerHTML = '&#9776;';
-      });
+      overlay.addEventListener('click', closeSidebar);
     }
 
     // Close sidebar when clicking a nav link on mobile
     sidebar.querySelectorAll('a').forEach(function (link) {
       link.addEventListener('click', function () {
         if (window.innerWidth <= 768) {
-          sidebar.classList.remove('open');
-          if (overlay) overlay.classList.remove('open');
-          btn.innerHTML = '&#9776;';
+          closeSidebar();
         }
       });
     });
+
+    // Swipe gesture to open/close sidebar
+    var touchStartX = 0;
+    var touchStartY = 0;
+    var touchDeltaX = 0;
+    var isSwiping = false;
+
+    document.addEventListener('touchstart', function (e) {
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+      isSwiping = false;
+    }, { passive: true });
+
+    document.addEventListener('touchmove', function (e) {
+      if (window.innerWidth > 768) return;
+
+      var deltaX = e.touches[0].clientX - touchStartX;
+      var deltaY = e.touches[0].clientY - touchStartY;
+      touchDeltaX = deltaX;
+
+      // Only activate swipe if horizontal movement is dominant
+      if (!isSwiping && Math.abs(deltaX) > 15 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
+        isSwiping = true;
+      }
+    }, { passive: true });
+
+    document.addEventListener('touchend', function () {
+      if (!isSwiping || window.innerWidth > 768) return;
+
+      // Swipe right from left edge to open
+      if (touchStartX < 30 && touchDeltaX > 60 && !sidebar.classList.contains('open')) {
+        openSidebar();
+      }
+      // Swipe left to close
+      else if (touchDeltaX < -60 && sidebar.classList.contains('open')) {
+        closeSidebar();
+      }
+
+      isSwiping = false;
+      touchDeltaX = 0;
+    }, { passive: true });
   }
 
   // === Scroll Spy (active nav highlighting) ===
   function initScrollSpy() {
-    const navLinks = document.querySelectorAll('.sidebar-nav a[href^="#"]');
+    var navLinks = document.querySelectorAll('.sidebar-nav a[href^="#"]');
     if (navLinks.length === 0) return;
 
-    const sections = [];
+    var sections = [];
     navLinks.forEach(function (link) {
-      const id = link.getAttribute('href').slice(1);
-      const el = document.getElementById(id);
+      var id = link.getAttribute('href').slice(1);
+      var el = document.getElementById(id);
       if (el) sections.push({ id: id, el: el, link: link });
     });
 
     function onScroll() {
-      const scrollY = window.scrollY + 100;
+      var scrollY = window.scrollY + 120;
 
-      let current = null;
-      for (let i = sections.length - 1; i >= 0; i--) {
+      var current = null;
+      for (var i = sections.length - 1; i >= 0; i--) {
         if (sections[i].el.offsetTop <= scrollY) {
           current = sections[i];
           break;
@@ -99,10 +189,15 @@
           var title = group.querySelector('.nav-group-title');
           if (title) title.classList.add('active');
         }
+
+        // Scroll active link into sidebar view on mobile
+        if (window.innerWidth <= 768 && document.querySelector('.sidebar.open')) {
+          current.link.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
       }
     }
 
-    let ticking = false;
+    var ticking = false;
     window.addEventListener('scroll', function () {
       if (!ticking) {
         requestAnimationFrame(function () {
@@ -118,17 +213,17 @@
 
   // === Reading Progress Bar ===
   function initProgress() {
-    const bar = document.querySelector('.reading-progress');
+    var bar = document.querySelector('.reading-progress');
     if (!bar) return;
 
     function update() {
-      const scrollTop = window.scrollY;
-      const docHeight = document.documentElement.scrollHeight - window.innerHeight;
-      const progress = docHeight > 0 ? (scrollTop / docHeight) * 100 : 0;
+      var scrollTop = window.scrollY;
+      var docHeight = document.documentElement.scrollHeight - window.innerHeight;
+      var progress = docHeight > 0 ? (scrollTop / docHeight) * 100 : 0;
       bar.style.width = progress + '%';
     }
 
-    let ticking = false;
+    var ticking = false;
     window.addEventListener('scroll', function () {
       if (!ticking) {
         requestAnimationFrame(function () {
@@ -142,11 +237,11 @@
 
   // === Back to Top ===
   function initBackToTop() {
-    const btn = document.querySelector('.back-to-top');
+    var btn = document.querySelector('.back-to-top');
     if (!btn) return;
 
     window.addEventListener('scroll', function () {
-      if (window.scrollY > 600) {
+      if (window.scrollY > 400) {
         btn.classList.add('visible');
       } else {
         btn.classList.remove('visible');
@@ -158,16 +253,88 @@
     });
   }
 
+  // === Section Collapse (Mobile) ===
+  function initSectionCollapse() {
+    if (window.innerWidth > 768) return;
+
+    // Find all question-blocks that are long enough to benefit from collapse
+    var blocks = document.querySelectorAll('.question-block');
+    blocks.forEach(function (block) {
+      // Only collapse blocks taller than 500px
+      if (block.scrollHeight <= 500) return;
+
+      var wrapper = document.createElement('div');
+      wrapper.className = 'section-collapsible';
+
+      // Move block content into wrapper
+      block.parentNode.insertBefore(wrapper, block);
+      wrapper.appendChild(block);
+
+      var btn = document.createElement('button');
+      btn.className = 'section-collapse-btn';
+      btn.setAttribute('aria-label', '收起/展开本节');
+      wrapper.parentNode.insertBefore(btn, wrapper.nextSibling);
+
+      btn.addEventListener('click', function () {
+        wrapper.classList.toggle('collapsed');
+        btn.classList.toggle('collapsed');
+      });
+    });
+  }
+
+  // === Scroll Hint for horizontally scrollable elements ===
+  function initScrollHints() {
+    var scrollables = document.querySelectorAll('.table-wrapper, .table-wrap, .diagram, .svg-container, pre');
+
+    scrollables.forEach(function (el) {
+      function checkScroll() {
+        if (el.scrollWidth > el.clientWidth + 2) {
+          el.classList.add('scroll-hint', 'can-scroll');
+        } else {
+          el.classList.remove('scroll-hint', 'can-scroll');
+        }
+      }
+
+      // Check on load and resize
+      checkScroll();
+      window.addEventListener('resize', checkScroll);
+
+      // Remove hint after user scrolls
+      el.addEventListener('scroll', function () {
+        el.classList.remove('can-scroll');
+      }, { once: true });
+    });
+  }
+
+  // === Viewport Height Fix (iOS 100vh bug) ===
+  function initViewportFix() {
+    function setVH() {
+      var vh = window.innerHeight * 0.01;
+      document.documentElement.style.setProperty('--vh', vh + 'px');
+    }
+    setVH();
+    window.addEventListener('resize', setVH);
+  }
+
   // === Init All ===
   function init() {
     initTheme();
+    initFontSize();
     initMobileMenu();
     initScrollSpy();
     initProgress();
     initBackToTop();
+    initFontSizeControls();
+    initViewportFix();
+
+    // Delay non-critical init
+    setTimeout(function () {
+      initSectionCollapse();
+      initScrollHints();
+    }, 300);
 
     // Theme toggle button
-    const themeBtn = document.querySelector('.theme-toggle');
+    var themeBtn = document.querySelector('.theme-toggle');
     if (themeBtn) themeBtn.addEventListener('click', toggleTheme);
   }
 
