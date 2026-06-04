@@ -3272,117 +3272,151 @@ SET GLOBAL innodb_lock_wait_timeout = 1;  -- 设短超时
       Q5: 如何分析和解决死锁问题？给出实际案例
     </h3>
     <div class="answer">
-      <h4>一、获取死锁信息</h4>
-      <pre><code class="sql">-- 方法1：查看最近一次死锁日志
+      <h4>一、什么是死锁？一句话理解</h4>
+      <p><strong>两个事务互相持有对方需要的锁，谁也不肯松手，永远等下去。</strong></p>
+      <p>就像两个人过独木桥：A从左走到中间，B从右走到中间，都要对方让路，谁也不退，就卡住了。</p>
+
+      <h4>二、最经典的死锁场景：先查后插（SELECT FOR UPDATE + INSERT）</h4>
+      <p>这是<strong>生产环境出现频率最高</strong>的死锁模式。场景：实现幂等，先查记录是否存在，不存在则插入。</p>
+
+      <p><strong>表结构：</strong></p>
+      <pre><code class="sql">CREATE TABLE orders (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  order_no VARCHAR(32) UNIQUE KEY,  -- 唯一索引！关键
+  user_id BIGINT,
+  amount DECIMAL(10,2)
+);
+
+-- 已有数据：order_no = 'ORD_001', 'ORD_005', 'ORD_010'
+-- 注意：唯一索引上 ORD_001 和 ORD_005 之间有一个"间隙"</code></pre>
+
+      <p><strong>死锁发生的完整时间线：</strong></p>
+      <table style="width:100%;border-collapse:collapse;margin:12px 0;">
+        <thead>
+          <tr style="background:var(--table-header-bg);">
+            <th style="padding:10px;border:1px solid var(--border);width:60px;">时刻</th>
+            <th style="padding:10px;border:1px solid var(--border);">事务 A（插入 ORD_003）</th>
+            <th style="padding:10px;border:1px solid var(--border);">事务 B（插入 ORD_004）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:10px;border:1px solid var(--border);text-align:center;font-weight:600;">T1</td>
+            <td style="padding:10px;border:1px solid var(--border);">
+              <code>SELECT * FROM orders WHERE order_no='ORD_003' FOR UPDATE;</code><br>
+              结果：不存在。<br>
+              <strong style="color:var(--red);">加了 Gap Lock：锁住 (ORD_001, ORD_005) 这个间隙</strong>
+            </td>
+            <td style="padding:10px;border:1px solid var(--border);color:var(--text-muted);">还没开始</td>
+          </tr>
+          <tr>
+            <td style="padding:10px;border:1px solid var(--border);text-align:center;font-weight:600;">T2</td>
+            <td style="padding:10px;border:1px solid var(--border);color:var(--text-muted);">等待中...</td>
+            <td style="padding:10px;border:1px solid var(--border);">
+              <code>SELECT * FROM orders WHERE order_no='ORD_004' FOR UPDATE;</code><br>
+              结果：不存在。<br>
+              <strong style="color:var(--red);">也加了 Gap Lock：同样锁住 (ORD_001, ORD_005) 这个间隙</strong><br>
+              <em>Gap Lock 之间互相兼容，所以不阻塞！两个事务都成功获得 Gap Lock。</em>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:10px;border:1px solid var(--border);text-align:center;font-weight:600;">T3</td>
+            <td style="padding:10px;border:1px solid var(--border);">
+              <code>INSERT INTO orders(order_no,...) VALUES('ORD_003',...);</code><br>
+              <strong style="color:var(--orange);">需要插入意向锁（Insert Intention Lock），但被事务 B 的 Gap Lock 阻塞！</strong><br>
+              等待 B 释放...
+            </td>
+            <td style="padding:10px;border:1px solid var(--border);color:var(--text-muted);">还没到这步</td>
+          </tr>
+          <tr style="background:rgba(232,136,122,0.05);">
+            <td style="padding:10px;border:1px solid var(--border);text-align:center;font-weight:600;">T4</td>
+            <td style="padding:10px;border:1px solid var(--border);color:var(--text-muted);">仍在等待 B...</td>
+            <td style="padding:10px;border:1px solid var(--border);">
+              <code>INSERT INTO orders(order_no,...) VALUES('ORD_004',...);</code><br>
+              <strong style="color:var(--red);">需要插入意向锁，但被事务 A 的 Gap Lock 阻塞！</strong><br>
+              <strong style="color:var(--red);">A 等 B，B 等 A → DEADLOCK!</strong>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h4>三、关键知识点：为什么会死锁？</h4>
+      <ul>
+        <li><strong>Gap Lock 之间互相兼容</strong>：两个事务可以同时对同一间隙加 Gap Lock（都是"防止别人插入"的意思）</li>
+        <li><strong>Gap Lock 与 Insert Intention Lock 不兼容</strong>：如果间隙上有 Gap Lock，INSERT 需要的插入意向锁就会被阻塞</li>
+        <li><strong>结果</strong>：A 持有 Gap Lock 等 B 的 Gap Lock 释放；B 持有 Gap Lock 等 A 的 Gap Lock 释放 → 死锁</li>
+      </ul>
+
+      <p><strong>记忆口诀：</strong>"Gap Lock 互相不排斥，但都排斥 Insert Intention Lock"</p>
+
+      <h4>四、获取死锁信息</h4>
+      <pre><code class="sql">-- 方法1：查看最近一次死锁日志（最常用）
 SHOW ENGINE INNODB STATUS\G
 
--- 方法2：开启所有死锁日志记录到error log
+-- 方法2：开启所有死锁日志记录到 error log
 SET GLOBAL innodb_print_all_deadlocks = ON;
 
 -- 方法3：MySQL 8.0+ performance_schema
 SELECT * FROM performance_schema.events_errors_summary_global_by_error
 WHERE ERROR_NAME = 'ER_LOCK_DEADLOCK';</code></pre>
 
-      <h4>二、实际案例：插入意向锁导致的死锁</h4>
-      <p>这是生产环境中最常见的死锁模式之一：</p>
-      <pre><code class="sql">-- 表结构
-CREATE TABLE orders (
-  id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  order_no VARCHAR(32) UNIQUE KEY,
-  user_id BIGINT,
-  amount DECIMAL(10,2),
-  INDEX idx_user(user_id)
-);
-
--- 已有数据: order_no = 'ORD001', 'ORD003', 'ORD005'
-
--- 事务A                                    -- 事务B
-BEGIN;                                       BEGIN;
--- 插入 ORD002，需要获取                    -- 插入 ORD004，需要获取
--- (ORD001, ORD003) 间隙的插入意向锁        -- (ORD003, ORD005) 间隙的插入意向锁
-
--- 但如果场景变为：
-DELETE FROM orders WHERE order_no = 'ORD002'; DELETE FROM orders WHERE order_no = 'ORD004';
--- 获得 (ORD001,ORD003) 的 Gap Lock         -- 获得 (ORD003,ORD005) 的 Gap Lock
-
-INSERT INTO orders(order_no,user_id,amount)  INSERT INTO orders(order_no,user_id,amount)
-VALUES('ORD002',1,100);                      VALUES('ORD004',2,200);
--- 需要插入意向锁，但被B的Gap Lock阻塞?    -- 需要插入意向锁，但被A的Gap Lock阻塞?
--- 实际上Gap Lock之间互相兼容！
-
--- 正确的死锁场景：
--- 事务A                                    -- 事务B
-BEGIN;                                       BEGIN;
-SELECT * FROM orders                         SELECT * FROM orders
-WHERE order_no = 'ORD002' FOR UPDATE;        WHERE order_no = 'ORD004' FOR UPDATE;
--- 不存在，获得(ORD001,ORD003)的Gap Lock    -- 不存在，获得(ORD003,ORD005)的Gap Lock
-
-INSERT INTO orders(order_no,user_id,amount)  INSERT INTO orders(order_no,user_id,amount)
-VALUES('ORD004',2,200);                      VALUES('ORD002',1,100);
--- 需要(ORD003,ORD005)间隙的插入意向锁     -- 需要(ORD001,ORD003)间隙的插入意向锁
--- 与B的Gap Lock冲突！等待...              -- 与A的Gap Lock冲突！等待...
--- !!!! DEADLOCK !!!!</code></pre>
-
-      <h4>三、SHOW ENGINE INNODB STATUS 死锁日志分析</h4>
-      <pre><code class="sql">------------------------
+      <h4>五、如何读懂死锁日志？</h4>
+      <pre><code class="sql">-- SHOW ENGINE INNODB STATUS 输出示例（精简版）：
+------------------------
 LATEST DETECTED DEADLOCK
 ------------------------
-2024-01-15 10:23:45 0x7f8b2c0a8700
-*** (1) TRANSACTION:
+*** (1) TRANSACTION:   -- 事务1的信息
 TRANSACTION 123456, ACTIVE 2 sec inserting
-mysql tables in use 1, locked 1
-LOCK WAIT 3 lock struct(s), heap size 1136, 2 row lock(s)
-MySQL thread id 10, OS thread handle 140234527...
-INSERT INTO orders(order_no,user_id,amount) VALUES('ORD004',2,200)
+INSERT INTO orders(order_no,...) VALUES('ORD_003',...)
 
-*** (1) HOLDS THE LOCK(S):
-RECORD LOCKS space id 58 page no 4 n bits 72 index uniq_order_no
-lock_mode X locks gap before rec
--- 解读：事务1持有 GAP X锁，在uniq_order_no索引上
+*** (1) HOLDS THE LOCK(S):     -- 事务1 持有 什么锁
+lock_mode X locks gap before rec           -- ← Gap X Lock
+index uniq_order_no                        -- ← 锁在哪个索引上
 
-*** (1) WAITING FOR THIS LOCK TO BE GRANTED:
-RECORD LOCKS space id 58 page no 4 n bits 72 index uniq_order_no
-lock_mode X locks gap before rec insert intention waiting
--- 解读：事务1等待 插入意向锁
+*** (1) WAITING FOR THIS LOCK:  -- 事务1 在等 什么锁
+lock_mode X locks gap before rec insert intention waiting  -- ← 插入意向锁
 
-*** (2) TRANSACTION:
-TRANSACTION 123457, ACTIVE 1 sec inserting
-mysql tables in use 1, locked 1
-3 lock struct(s), heap size 1136, 2 row lock(s)
-MySQL thread id 11, OS thread handle 140234528...
-INSERT INTO orders(order_no,user_id,amount) VALUES('ORD002',1,100)
+*** (2) TRANSACTION:   -- 事务2的信息
+INSERT INTO orders(order_no,...) VALUES('ORD_004',...)
 
-*** (2) HOLDS THE LOCK(S):
-RECORD LOCKS space id 58 page no 4 n bits 72 index uniq_order_no
-lock_mode X locks gap before rec
+*** (2) HOLDS THE LOCK(S):     -- 事务2 持有 什么锁
+lock_mode X locks gap before rec           -- ← 也是 Gap X Lock
 
-*** (2) WAITING FOR THIS LOCK TO BE GRANTED:
-RECORD LOCKS space id 58 page no 4 n bits 72 index uniq_order_no
-lock_mode X locks gap before rec insert intention waiting
+*** (2) WAITING FOR THIS LOCK:  -- 事务2 在等 什么锁
+lock_mode X locks gap before rec insert intention waiting  -- ← 也在等插入意向锁
 
-*** WE ROLL BACK TRANSACTION (2)
--- InnoDB选择回滚事务2（undo量更少）</code></pre>
+*** WE ROLL BACK TRANSACTION (2)  -- InnoDB 选择回滚 undo 量更少的事务</code></pre>
 
-      <h4>四、死锁日志阅读方法论</h4>
+      <p><strong>日志阅读四步法：</strong></p>
       <ol>
-        <li><strong>找到两个事务分别持有和等待的锁</strong></li>
-        <li><strong>确认锁的索引</strong>：<code>index uniq_order_no</code> 告诉你锁在哪个索引上</li>
-        <li><strong>确认锁的模式</strong>：<code>lock_mode X locks gap before rec</code> = Gap X Lock</li>
-        <li><strong>确认等待类型</strong>：<code>insert intention waiting</code> = 插入意向锁等待</li>
-        <li><strong>还原SQL执行顺序</strong>：根据HOLDS和WAITING重建事务时序</li>
+        <li>看 <code>HOLDS THE LOCK</code>：每个事务持有什么锁？</li>
+        <li>看 <code>WAITING FOR</code>：每个事务在等什么锁？</li>
+        <li>画环：A 持有 → B 等待 → B 持有 → A 等待 → 形成环 = 死锁</li>
+        <li>看 <code>index xxx</code>：确认锁在哪个索引上，定位到具体业务</li>
       </ol>
 
-      <h4>五、解决方案</h4>
-      <pre><code class="sql">-- 方案1：INSERT ON DUPLICATE KEY UPDATE 避免 SELECT FOR UPDATE + INSERT 模式
+      <h4>六、解决方案</h4>
+      <pre><code class="sql">-- 方案1（推荐）：用 INSERT ON DUPLICATE KEY 代替 SELECT FOR UPDATE + INSERT
+-- 一条语句完成，不会先加Gap Lock再加Insert Intention Lock
 INSERT INTO orders(order_no, user_id, amount)
-VALUES('ORD002', 1, 100)
-ON DUPLICATE KEY UPDATE amount = VALUES(amount);
+VALUES('ORD_003', 1, 100)
+ON DUPLICATE KEY UPDATE user_id = VALUES(user_id);
 
--- 方案2：降低隔离级别到RC（去掉Gap Lock）
+-- 方案2：降低隔离级别到 READ COMMITTED
+-- RC 级别下不会加 Gap Lock，直接消除死锁根源
 SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
 
--- 方案3：减小事务粒度，缩短持锁时间
--- 方案4：按固定顺序访问资源（最经典的死锁预防策略）</code></pre>
+-- 方案3：缩短事务，减少持锁时间
+-- 把 SELECT FOR UPDATE 和 INSERT 放在尽可能短的事务中
+
+-- 方案4：固定顺序访问资源
+-- 如果业务必须操作多行，确保所有事务按相同顺序加锁
+-- 比如都按 order_no 升序处理，避免交叉等待</code></pre>
+
+      <div class="key-point" style="background:rgba(232,136,122,0.04);border-left:3px solid var(--red);padding:12px 16px;margin:16px 0;border-radius:0 8px 8px 0;">
+        <strong>面试总结：</strong><br>
+        "生产中最常见的死锁是'先查后插'模式：两个事务对同一间隙加了 Gap Lock（互相兼容），然后各自 INSERT 需要插入意向锁（与 Gap Lock 冲突），互相等待形成死锁。解决方案首选 INSERT ON DUPLICATE KEY UPDATE，或者降到 RC 隔离级别去掉 Gap Lock。"
+      </div>
     </div>
   </article>
 
@@ -3482,7 +3516,61 @@ WHERE id = 1001 AND stock >= 1;
         </tbody>
       </table>
 
-      <h4>四、Java应用层实践</h4>
+      <h4>四、ABA 问题详解</h4>
+      <p><strong>什么是 ABA 问题？</strong>乐观锁的 CAS（Compare And Swap）操作只检查"值是否和之前读到的一样"。如果值从 A 变成了 B，又变回了 A，CAS 检测不出来中间发生过变化——这就是 ABA 问题。</p>
+
+      <p><strong>生活中的类比：</strong></p>
+      <p>你去 ATM 查余额是 1000 元，准备转出 500。在你操作的同时：别人先转走了 1000（余额变 0），又有人转入了 1000（余额变回 1000）。你再操作时看到余额还是 1000，以为没变过，实际上钱已经被周转过一圈了。</p>
+
+      <p><strong>MySQL 中的具体场景：</strong></p>
+      <pre><code class="sql">-- 假设用「余额值本身」做 CAS 条件（错误做法）
+-- 账户余额 = 1000
+
+-- 事务A：读取余额
+SELECT balance FROM account WHERE id = 1;  -- 读到 balance = 1000
+
+-- 事务B：扣款 1000（余额变为 0）
+UPDATE account SET balance = 0 WHERE id = 1;
+
+-- 事务C：充值 1000（余额变回 1000）
+UPDATE account SET balance = 1000 WHERE id = 1;
+
+-- 事务A：用读到的值做 CAS 更新
+UPDATE account SET balance = balance - 500
+WHERE id = 1 AND balance = 1000;
+-- affected_rows = 1，更新成功！
+-- 但事务A并不知道中间发生过 1000 → 0 → 1000 的变化
+-- 如果业务逻辑依赖"中间没有变化"这个假设，就会出问题</code></pre>
+
+      <p><strong>ABA 在什么场景下真正有害？</strong></p>
+      <ul>
+        <li><strong>余额/库存扣减</strong>：单纯的数值增减，ABA 通常无害（最终数值正确即可）</li>
+        <li><strong>状态机流转</strong>：订单状态 待支付→已支付→已退款→待支付。如果用状态值做 CAS，可能在"已退款后重新待支付"时误判为"一直是待支付"</li>
+        <li><strong>链表/指针操作</strong>：Java CAS 操作中，节点 A 被删除后重新分配了相同地址，经典的并发容器 bug</li>
+      </ul>
+
+      <p><strong>解决方案：</strong></p>
+      <pre><code class="sql">-- 方案1（推荐）：用 version 版本号，而不是用业务字段做 CAS
+-- version 只增不减，彻底杜绝 ABA
+UPDATE account 
+SET balance = balance - 500, version = version + 1
+WHERE id = 1 AND version = 5;
+-- 即使 balance 经历了 1000→0→1000，version 已从 5 变成 7
+-- version=5 匹配不上，更新失败，触发重试
+
+-- 方案2：用时间戳（精度够的话也能避免 ABA）
+UPDATE account 
+SET balance = balance - 500, updated_at = NOW(6)
+WHERE id = 1 AND updated_at = '2024-01-15 10:00:00.123456';
+
+-- Java 中的方案：AtomicStampedReference
+-- 在引用上附加一个 stamp（版本号），CAS 同时比较引用和 stamp</code></pre>
+
+      <div class="key-point" style="background:rgba(232,136,122,0.04);border-left:3px solid var(--red);padding:12px 16px;margin:16px 0;border-radius:0 8px 8px 0;">
+        <strong>面试话术：</strong>"ABA 问题是指 CAS 比较时值没变，但中间被改过又改回来了。在数据库乐观锁中，用<strong>只增不减的 version 字段</strong>做 CAS 条件就能完全避免——因为 version 不可能出现 A→B→A 的回退。"
+      </div>
+
+      <h4>五、Java应用层实践</h4>
       <pre><code class="sql">-- MyBatis中的乐观锁实现（配合mybatis-plus）
 -- Entity:
 -- @Version
