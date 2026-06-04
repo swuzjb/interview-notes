@@ -6384,29 +6384,69 @@ CREATE TABLE orders_0000 (
 
   <!-- Q6: 大表DDL -->
   <div id="tune-q6" class="qa-block">
-    <h3><span class="q-num">6</span>大表 DDL 安全执行</h3>
+    <h3><span class="q-num">6</span>大表 DDL 安全执行 / Online DDL / 无锁变更</h3>
 
-    <h4>为什么大表 DDL 危险？</h4>
+    <div class="key-point" style="background:#fff3cd;border-left:4px solid #ffc107;padding:12px;margin-bottom:16px;">
+      <strong>面试背景：</strong>吉利二面被问到"大表加列会锁表，能不能用无锁变更？"这是 B 端系统治理大表、做数据迁移时的高频实操问题。
+    </div>
+
+    <h4>为什么需要无锁变更？</h4>
     <ul>
-      <li>传统 DDL（COPY 算法）：创建新表 → 复制全部数据 → 交换表名。期间<span class="highlight">阻塞所有 DML</span></li>
+      <li>MySQL 原生 DDL（如 <code>ALTER TABLE ADD COLUMN</code>）在早期版本中会<span class="highlight">锁全表</span>，阻塞所有读写</li>
+      <li>即使 MySQL 5.6+ 引入了 Online DDL，仍有很多操作需要短暂的排他锁（MDL写锁），对高并发线上业务不可接受</li>
       <li>大表（数亿行）DDL 可能执行数小时，导致业务完全不可用</li>
       <li>MDL (Metadata Lock) 冲突导致后续所有查询排队</li>
     </ul>
 
-    <h4>MySQL Online DDL (5.6+)</h4>
-    <p>MySQL 5.6引入了Online DDL，允许在DDL执行期间并发进行DML操作。其核心是INPLACE算法，与传统COPY算法的差异如下：</p>
+    <h4>MySQL 原生 Online DDL（5.6+）</h4>
+    <p>MySQL 5.6引入了Online DDL，允许在DDL执行期间并发进行DML操作。</p>
+    <pre><code class="sql">ALTER TABLE payment_order ADD COLUMN new_vehicle_code VARCHAR(64) DEFAULT NULL, ALGORITHM=INPLACE, LOCK=NONE;</code></pre>
+
+    <h4>三种算法对比</h4>
+    <table style="width:100%;border-collapse:collapse;margin:12px 0;">
+      <tr style="background:#1565C0;color:white;">
+        <th style="padding:8px;border:1px solid #ddd;">ALGORITHM</th>
+        <th style="padding:8px;border:1px solid #ddd;">原理</th>
+        <th style="padding:8px;border:1px solid #ddd;">是否锁表</th>
+        <th style="padding:8px;border:1px solid #ddd;">适用场景</th>
+      </tr>
+      <tr>
+        <td style="padding:8px;border:1px solid #ddd;"><strong>COPY</strong></td>
+        <td style="padding:8px;border:1px solid #ddd;">创建新表→复制数据→rename</td>
+        <td style="padding:8px;border:1px solid #ddd;color:red;">全程锁表</td>
+        <td style="padding:8px;border:1px solid #ddd;">兜底方案</td>
+      </tr>
+      <tr style="background:#f9f9f9;">
+        <td style="padding:8px;border:1px solid #ddd;"><strong>INPLACE</strong></td>
+        <td style="padding:8px;border:1px solid #ddd;">在原表上直接修改（引擎内部重建）</td>
+        <td style="padding:8px;border:1px solid #ddd;color:orange;">仅开头和结尾短暂MDL锁</td>
+        <td style="padding:8px;border:1px solid #ddd;">大部分DDL</td>
+      </tr>
+      <tr>
+        <td style="padding:8px;border:1px solid #ddd;"><strong>INSTANT</strong></td>
+        <td style="padding:8px;border:1px solid #ddd;">只修改元数据，不动数据文件</td>
+        <td style="padding:8px;border:1px solid #ddd;color:green;">几乎不锁（毫秒级）</td>
+        <td style="padding:8px;border:1px solid #ddd;">加列（MySQL 8.0.12+）</td>
+      </tr>
+    </table>
+
     <p><strong>COPY算法的步骤</strong>（传统方式，5.5及之前）：① 创建与原表结构相同的临时表 → ② 在临时表上执行DDL变更 → ③ 逐行将原表数据复制到临时表 → ④ 期间阻塞所有DML → ⑤ 交换表名（RENAME） → ⑥ 删除旧表。</p>
     <p><strong>INPLACE算法的步骤</strong>（Online DDL）：① 获取MDL排他锁（短暂） → ② 降级为MDL共享锁，允许并发DML → ③ 在原表的数据文件上直接执行变更（如构建新索引的B+树） → ④ 期间并发DML产生的增量修改记录到row log（内存buffer，可溢出到磁盘） → ⑤ DDL主体完成后，再次获取MDL排他锁（短暂） → ⑥ 将row log中的增量应用到新结构上 → ⑦ 释放MDL锁，DDL完成。关键点在于MDL排他锁只在开始和结束时短暂持有，中间阶段允许并发读写。</p>
-    <pre><code class="sql">-- Online DDL 语法
+
+    <h4>MySQL 8.0 INSTANT ADD COLUMN（重点）</h4>
+    <ul>
+      <li>仅修改数据字典元数据，<strong>不重建表、不拷贝数据</strong></li>
+      <li>新加的列默认值存在元数据中，已有行读取时"虚拟填充"</li>
+      <li>限制：只能加在最后一列（8.0.29+ 解除此限制）</li>
+    </ul>
+    <pre><code class="sql">-- 8.0 INSTANT DDL (最安全、最快):
+ALTER TABLE orders ADD COLUMN remark VARCHAR(255) DEFAULT '', ALGORITHM=INSTANT;
+
+-- Online DDL 完整语法
 ALTER TABLE orders
   ADD INDEX idx_status_date (status, create_time),
   ALGORITHM=INPLACE,  -- 或 COPY/INSTANT
   LOCK=NONE;          -- 或 SHARED/EXCLUSIVE
-
--- ALGORITHM 选项:
--- INSTANT (8.0.12+): 仅修改元数据，毫秒完成。支持: 添加列(末尾)、修改默认值等
--- INPLACE: 不复制全表，在原表上操作。支持: 加索引、改列名等
--- COPY: 传统复制方式，DDL期间表不可写
 
 -- LOCK 选项:
 -- NONE: 允许并发读写 (目标)
@@ -6415,14 +6455,11 @@ ALTER TABLE orders
 
 -- 查看DDL进度 (8.0+)
 SELECT * FROM performance_schema.events_stages_current
-WHERE EVENT_NAME LIKE '%alter%'\G
+WHERE EVENT_NAME LIKE '%alter%'\G</code></pre>
 
--- 典型的可以Online执行的DDL:
-ALTER TABLE orders ADD INDEX idx_amount (amount), ALGORITHM=INPLACE, LOCK=NONE;
-ALTER TABLE orders DROP INDEX idx_old, ALGORITHM=INPLACE, LOCK=NONE;
-
--- 8.0 INSTANT DDL (最安全):
-ALTER TABLE orders ADD COLUMN remark VARCHAR(255) DEFAULT '', ALGORITHM=INSTANT;</code></pre>
+    <div class="key-point" style="background:#e8f5e9;border-left:4px solid #4caf50;padding:12px;margin:12px 0;">
+      <strong>面试话术：</strong>"如果是 MySQL 8.0+，加列可以用 INSTANT 算法，本质上只修改元数据，毫秒级完成，不锁表。如果是 5.7 或需要加索引等更复杂的变更，就需要用第三方工具。"
+    </div>
 
     <h4>Online DDL 的坑</h4>
     <pre><code class="sql">-- 坑1: Online DDL仍然需要短暂获取MDL排他锁(在开始和结束时)
@@ -6440,16 +6477,31 @@ WHERE TIME_TO_SEC(TIMEDIFF(NOW(), trx_started)) > 60;
 -- 如果row log溢出(innodb_online_alter_log_max_size), DDL失败
 SET GLOBAL innodb_online_alter_log_max_size = 2 * 1024 * 1024 * 1024;  -- 2GB</code></pre>
 
-    <h4>pt-online-schema-change (Percona推荐方案)</h4>
-    <pre><code class="sql">-- 原理:
--- 1. 创建与原表结构相同的新表 _orders_new
--- 2. 在新表上执行DDL
--- 3. 创建触发器: 将原表的INSERT/UPDATE/DELETE同步到新表
--- 4. 分批(chunk)将原表数据拷贝到新表
--- 5. RENAME TABLE 原子交换表名
--- 6. 删除旧表
-
--- 使用示例:
+    <h4>pt-online-schema-change（Percona Toolkit）</h4>
+    <p><strong>原理：影子表 + 触发器 + rename</strong></p>
+    <ol>
+      <li>创建一张结构相同的影子表（_new 表）</li>
+      <li>在影子表上执行 ALTER（此时无流量，DDL 瞬间完成）</li>
+      <li>在原表上创建 INSERT/UPDATE/DELETE 三个触发器 → 所有对原表的 DML 同步应用到影子表</li>
+      <li>分批将原表历史数据复制到影子表（chunk by chunk）</li>
+      <li>复制完成后，RENAME TABLE 原子交换（原表→_old，影子表→原表）</li>
+      <li>删除触发器和旧表</li>
+    </ol>
+    <p><strong>优点：</strong></p>
+    <ul>
+      <li>久经验证，Percona 官方维护</li>
+      <li>变更过程中原表正常读写</li>
+      <li>可暂停/中止、有进度条、触发器机制更可控</li>
+    </ul>
+    <p><strong>缺点：</strong></p>
+    <ul>
+      <li>依赖触发器（MySQL 一张表只能有一套同类型触发器）</li>
+      <li>如果原表已有触发器则无法使用</li>
+      <li>触发器在高并发写入时有性能开销（约10%~20%）</li>
+      <li>RENAME 瞬间需要短暂的 MDL 锁（通常毫秒级）</li>
+      <li>需要额外磁盘空间</li>
+    </ul>
+    <pre><code class="sql">-- 使用示例:
 # pt-online-schema-change \
 #   --alter "ADD INDEX idx_status(status), ADD COLUMN remark VARCHAR(255)" \
 #   --host=127.0.0.1 \
@@ -6461,15 +6513,29 @@ SET GLOBAL innodb_online_alter_log_max_size = 2 * 1024 * 1024 * 1024;  -- 2GB</c
 #   --critical-load="Threads_running=50" \
 #   --set-vars="innodb_lock_wait_timeout=5" \
 #   --execute \
-#   D=mydb,t=orders
+#   D=mydb,t=orders</code></pre>
 
--- 与Online DDL对比:
--- pt-osc优势: 可暂停/中止、有进度条、触发器机制更可控
--- pt-osc劣势: 需要额外磁盘空间、触发器有性能开销(约10%~20%)
--- Online DDL优势: 无额外空间(INPLACE)、性能开销小
--- Online DDL劣势: 不可中断、row log可能溢出
-
--- gh-ost (GitHub方案, 无触发器):
+    <h4>gh-ost（GitHub Online Schema Transmogrifier）</h4>
+    <p><strong>原理：影子表 + binlog 解析（无触发器）</strong></p>
+    <ol>
+      <li>创建影子表，执行 ALTER</li>
+      <li>连接为 MySQL 从库，解析 binlog 中对原表的变更 → 将变更实时回放到影子表（代替触发器）</li>
+      <li>分批复制历史数据（row copy）</li>
+      <li>追上 binlog 后，执行 cut-over（原子交换表名）</li>
+    </ol>
+    <p><strong>优点：</strong></p>
+    <ul>
+      <li><strong>无触发器</strong>，避免触发器的性能和限制问题</li>
+      <li>可暂停/恢复/动态调速（throttle）</li>
+      <li>对原表几乎零侵入</li>
+      <li>支持在从库上执行测试（<code>--test-on-replica</code>）</li>
+    </ul>
+    <p><strong>缺点：</strong></p>
+    <ul>
+      <li>依赖 binlog（<strong>必须开启 ROW 格式</strong>）</li>
+      <li>比 pt-osc 实现更复杂</li>
+    </ul>
+    <pre><code class="sql">-- gh-ost 使用示例:
 # gh-ost \
 #   --alter="ADD INDEX idx_status(status)" \
 #   --database="mydb" \
@@ -6479,6 +6545,78 @@ SET GLOBAL innodb_online_alter_log_max_size = 2 * 1024 * 1024 * 1024;  -- 2GB</c
 #   --chunk-size=1000 \
 #   --max-load='Threads_running=25' \
 #   --execute</code></pre>
+
+    <h4>三种方案对比总结</h4>
+    <table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:14px;">
+      <tr style="background:#1565C0;color:white;">
+        <th style="padding:8px;border:1px solid #ddd;">维度</th>
+        <th style="padding:8px;border:1px solid #ddd;">MySQL INSTANT</th>
+        <th style="padding:8px;border:1px solid #ddd;">pt-online-schema-change</th>
+        <th style="padding:8px;border:1px solid #ddd;">gh-ost</th>
+      </tr>
+      <tr>
+        <td style="padding:8px;border:1px solid #ddd;"><strong>原理</strong></td>
+        <td style="padding:8px;border:1px solid #ddd;">元数据修改</td>
+        <td style="padding:8px;border:1px solid #ddd;">影子表+触发器</td>
+        <td style="padding:8px;border:1px solid #ddd;">影子表+binlog</td>
+      </tr>
+      <tr style="background:#f9f9f9;">
+        <td style="padding:8px;border:1px solid #ddd;"><strong>锁表</strong></td>
+        <td style="padding:8px;border:1px solid #ddd;color:green;">不锁</td>
+        <td style="padding:8px;border:1px solid #ddd;color:orange;">极短暂MDL锁</td>
+        <td style="padding:8px;border:1px solid #ddd;color:orange;">极短暂MDL锁</td>
+      </tr>
+      <tr>
+        <td style="padding:8px;border:1px solid #ddd;"><strong>触发器</strong></td>
+        <td style="padding:8px;border:1px solid #ddd;">不需要</td>
+        <td style="padding:8px;border:1px solid #ddd;color:red;">需要</td>
+        <td style="padding:8px;border:1px solid #ddd;color:green;">不需要</td>
+      </tr>
+      <tr style="background:#f9f9f9;">
+        <td style="padding:8px;border:1px solid #ddd;"><strong>binlog</strong></td>
+        <td style="padding:8px;border:1px solid #ddd;">不需要</td>
+        <td style="padding:8px;border:1px solid #ddd;">不需要</td>
+        <td style="padding:8px;border:1px solid #ddd;color:red;"><strong>需要ROW格式</strong></td>
+      </tr>
+      <tr>
+        <td style="padding:8px;border:1px solid #ddd;"><strong>适用范围</strong></td>
+        <td style="padding:8px;border:1px solid #ddd;">仅加列(8.0+)</td>
+        <td style="padding:8px;border:1px solid #ddd;">几乎所有DDL</td>
+        <td style="padding:8px;border:1px solid #ddd;">几乎所有DDL</td>
+      </tr>
+      <tr style="background:#f9f9f9;">
+        <td style="padding:8px;border:1px solid #ddd;"><strong>复杂度</strong></td>
+        <td style="padding:8px;border:1px solid #ddd;">极低</td>
+        <td style="padding:8px;border:1px solid #ddd;">中</td>
+        <td style="padding:8px;border:1px solid #ddd;">中高</td>
+      </tr>
+      <tr>
+        <td style="padding:8px;border:1px solid #ddd;"><strong>生产推荐</strong></td>
+        <td style="padding:8px;border:1px solid #ddd;color:green;"><strong>首选（如果符合条件）</strong></td>
+        <td style="padding:8px;border:1px solid #ddd;">通用方案</td>
+        <td style="padding:8px;border:1px solid #ddd;color:#1565C0;"><strong>大厂首选</strong></td>
+      </tr>
+    </table>
+
+    <h4>阿里云 RDS / DMS 无锁变更</h4>
+    <p>如果使用阿里云 RDS，DMS（数据管理服务）提供了封装好的无锁变更能力：</p>
+    <ul>
+      <li>底层基于 gh-ost 或 pt-osc</li>
+      <li>自动检测表大小，小表直接 DDL，大表走无锁流程</li>
+      <li>提供进度监控、暂停/恢复、回滚能力</li>
+      <li>对用户透明，提交 SQL 即可</li>
+    </ul>
+
+    <h4>面试场景关联（吉利二面复盘）</h4>
+    <div class="key-point" style="background:#e3f2fd;border-left:4px solid #1565C0;padding:12px;margin:12px 0;">
+      <strong>问题：</strong>"大表加列会不会锁表？能不能用无锁变更？"<br><br>
+      <strong>标准回答：</strong><br>
+      "MySQL 8.0+ 加列可以用 INSTANT 算法，只改元数据，毫秒级完成，不锁表。如果是更复杂的变更（如加索引、改列类型），或者 MySQL 5.7 环境，就需要用 pt-online-schema-change 或 gh-ost。它们的核心思路都是'创建影子表→复制数据→原子交换'，区别在于增量同步的方式：pt-osc 用触发器，gh-ost 解析 binlog。本质上和'新表方案'是同一个思路，只是这些工具把整个流程自动化了。"
+    </div>
+    <div class="key-point" style="background:#fce4ec;border-left:4px solid #e94560;padding:12px;margin:12px 0;">
+      <strong>追问：你了解 gh-ost 和 pt-osc 的区别吗？</strong><br><br>
+      "gh-ost 不依赖触发器，而是通过解析 binlog 来同步增量变更到影子表。优势是对原表零侵入、支持动态调速暂停。但前提是 binlog 必须开启 ROW 格式。大厂（GitHub/字节/美团）普遍选 gh-ost。"
+    </div>
 
     <div class="key-point">
       <strong>生产建议：</strong><br>
