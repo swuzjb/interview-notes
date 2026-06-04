@@ -68,6 +68,51 @@
     }
   }
 
+  // === Desktop Sidebar Toggle ===
+  function initSidebarToggle() {
+    var sidebar = document.querySelector('.sidebar');
+    var mainContent = document.querySelector('.main-content');
+    if (!sidebar || !mainContent) return;
+    if (window.innerWidth <= 768) return;
+
+    // Create toggle button inside sidebar (at bottom)
+    var toggleBtn = document.createElement('button');
+    toggleBtn.className = 'sidebar-toggle';
+    toggleBtn.setAttribute('aria-label', '收起侧边栏');
+    toggleBtn.innerHTML = '&#9664; 收起菜单';
+    sidebar.appendChild(toggleBtn);
+
+    // Create floating re-open button (shown when collapsed)
+    var openBtn = document.createElement('button');
+    openBtn.className = 'sidebar-toggle-open';
+    openBtn.setAttribute('aria-label', '展开侧边栏');
+    openBtn.innerHTML = '&#9776;';
+    openBtn.title = '展开侧边栏';
+    document.body.appendChild(openBtn);
+
+    function collapse() {
+      sidebar.classList.add('collapsed');
+      mainContent.classList.add('expanded');
+      openBtn.classList.add('visible');
+      localStorage.setItem('bagu-sidebar-collapsed', 'true');
+    }
+
+    function expand() {
+      sidebar.classList.remove('collapsed');
+      mainContent.classList.remove('expanded');
+      openBtn.classList.remove('visible');
+      localStorage.setItem('bagu-sidebar-collapsed', 'false');
+    }
+
+    // Restore state
+    if (localStorage.getItem('bagu-sidebar-collapsed') === 'true') {
+      collapse();
+    }
+
+    toggleBtn.addEventListener('click', collapse);
+    openBtn.addEventListener('click', expand);
+  }
+
   // === Mobile Sidebar with Swipe Gesture ===
   function initMobileMenu() {
     var btn = document.querySelector('.mobile-menu-btn');
@@ -320,6 +365,7 @@
   function init() {
     initTheme();
     initFontSize();
+    initSidebarToggle();
     initMobileMenu();
     initScrollSpy();
     initProgress();

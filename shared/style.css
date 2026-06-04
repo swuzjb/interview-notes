@@ -160,11 +160,85 @@ body {
   overflow-y: auto;
   z-index: 200;
   padding: 2rem 0;
-  transition: transform var(--transition);
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex;
   flex-direction: column;
   -webkit-overflow-scrolling: touch;
-  /* No border-right! Use an internal glow instead */
+}
+
+/* Desktop sidebar collapsed state */
+.sidebar.collapsed {
+  transform: translateX(-100%);
+}
+
+/* Desktop sidebar toggle button - inside sidebar bottom */
+.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  margin: auto 0.75rem 0;
+  padding: 0.5rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--sidebar-text-dim);
+  cursor: pointer;
+  font-size: 0.72rem;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.sidebar-toggle:hover {
+  color: var(--accent);
+  background: var(--bg-sidebar-hover);
+  border-color: var(--accent);
+}
+
+/* When sidebar is collapsed, show a floating re-open button */
+.sidebar-toggle-open {
+  position: fixed;
+  top: 1.2rem;
+  left: 0.8rem;
+  z-index: 201;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: all 0.2s;
+}
+
+.sidebar-toggle-open:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.sidebar-toggle-open.visible {
+  display: flex;
+}
+
+/* Main content adjusts when sidebar collapses */
+.main-content {
+  margin-left: var(--sidebar-w);
+  flex: 1;
+  min-width: 0;
+  padding: 3rem 4rem 5rem;
+  max-width: none;
+  transition: margin-left 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.main-content.expanded {
+  margin-left: 0;
 }
 
 /* Soft edge glow instead of hard border */
@@ -1335,6 +1409,12 @@ hr {
    RESPONSIVE - MOBILE
    ============================================================ */
 @media (max-width: 768px) {
+  /* Hide desktop sidebar toggle on mobile */
+  .sidebar-toggle,
+  .sidebar-toggle-open {
+    display: none !important;
+  }
+
   html {
     font-size: calc(16px * var(--font-scale));
     scroll-padding-top: 3.5rem;
