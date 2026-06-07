@@ -97,6 +97,502 @@
             一个选择了模块化预制件（Pulsar：存算分离）。
         </p>
 
+        <h3>核心概念：先搞懂这些"角色"</h3>
+
+        <p>
+            在深入三大MQ之前，必须先理解消息队列中的核心角色。
+            我们用一个<strong>报社订阅系统</strong>的类比来串联所有概念——
+            把消息队列想象成一个大型报社的内容生产与分发体系：
+        </p>
+
+        <div class="callout">
+            <div class="callout-title">一句话记忆：MQ = 报社订阅系统</div>
+            <p>
+                <strong>Producer</strong>（记者）写好<strong>Message</strong>（文章）投稿到<strong>Broker</strong>（报社印刷中心），
+                按<strong>Topic</strong>（版面栏目：体育版、财经版）分类，每个版面有多条<strong>Partition</strong>（印刷生产线）并行印刷。
+                每个<strong>Consumer Group</strong>（订阅单位：小区A、小区B、图书馆）都独立收到<strong>一份完整的报纸</strong>，
+                组内的多个<strong>Consumer</strong>（投递员）分工负责不同楼栋。
+                <strong>Offset</strong>（派送进度）记录每个投递员送到第几份了。
+                为了防灾，报社在异地设了<strong>Replica</strong>（备份印厂）。<br><br>
+                <strong>关键区别于快递：</strong>快递一个包裹只能送一个人；而报纸一篇文章发表一次，
+                所有订阅组都能独立收到完整内容——这正是 MQ"发布-订阅"模型的核心。
+            </p>
+        </div>
+
+        <h4>Producer（生产者）—— 消息的发送方</h4>
+        <p>
+            Producer 是消息的源头，负责创建消息并发送到 Broker。
+            就像记者写好稿件投到报社——你只管产出内容，不需要知道有多少人订阅、谁在读。
+        </p>
+        <ul>
+            <li><strong>职责：</strong>构造消息、选择发送的 Topic、决定发到哪个 Partition（可指定Key路由）</li>
+            <li><strong>例子：</strong>用户下单后，订单服务作为 Producer，发送一条"订单已创建"消息到 <code>order-events</code> Topic</li>
+            <li><strong>关键特性：</strong>Producer 不需要知道谁在消费消息，这就是"解耦"的核心——记者不需要认识每一个读者</li>
+        </ul>
+
+        <h4>Consumer（消费者）—— 消息的接收方</h4>
+        <p>
+            Consumer 从 Broker 拉取消息并处理。
+            就像订阅用户从报社拿到报纸后阅读——你按自己的节奏读，读快读慢都行，报社不催你。
+        </p>
+        <ul>
+            <li><strong>职责：</strong>订阅 Topic、拉取消息、处理业务逻辑、确认消费进度（提交 Offset）</li>
+            <li><strong>例子：</strong>库存服务作为 Consumer，订阅 <code>order-events</code> Topic，收到"订单已创建"后执行扣减库存</li>
+            <li><strong>关键特性：</strong>Consumer 可以按自己的速度消费（背压），不会被 Producer 的速度压垮——报社每天出100版，你可以只看自己关心的</li>
+        </ul>
+
+        <h4>Broker（服务节点）—— 消息的存储与转发中心</h4>
+        <p>
+            Broker 是 MQ 集群中的服务器节点，负责接收 Producer 的消息、持久化存储、响应 Consumer 的拉取请求。
+            就像报社的印刷中心——文章到这里被排版、印刷、存档，等待各个订户来取。
+        </p>
+        <ul>
+            <li><strong>职责：</strong>消息存储、消息索引、响应读写请求、副本同步</li>
+            <li><strong>集群模式：</strong>生产环境通常部署 3~5 个 Broker 组成集群，任一节点宕机不影响整体服务</li>
+            <li><strong>例子：</strong>一个 Kafka 集群有 3 个 Broker（3台服务器），Topic 的不同 Partition 分布在不同 Broker 上，就像报社在三个地点设了印厂，分担印刷压力</li>
+        </ul>
+
+        <h4>Topic（主题）—— 消息的逻辑分类</h4>
+        <p>
+            Topic 是消息的逻辑归类方式，类似于数据库中的"表"。
+            就像报纸的不同版面——体育版、财经版、娱乐版各自独立，读者按兴趣订阅。
+            Producer 发消息时指定 Topic，Consumer 订阅感兴趣的 Topic。
+        </p>
+        <ul>
+            <li><strong>职责：</strong>对消息进行业务维度的隔离和分类</li>
+            <li><strong>命名实践：</strong><code>order-created</code>、<code>payment-completed</code>、<code>user-registered</code></li>
+            <li><strong>例子：</strong>电商系统可能有 <code>order-events</code>（订单相关）、<code>inventory-events</code>（库存相关）、<code>logistics-events</code>（物流相关）三个 Topic，就像报纸的商业版、仓储版、物流版各自独立互不干扰</li>
+        </ul>
+
+        <h4>Partition（分区）—— 并行处理的关键</h4>
+        <p>
+            Partition 是 Topic 的物理分片，是 MQ 实现<strong>水平扩展</strong>和<strong>并行消费</strong>的核心机制。
+            就像体育版的印刷任务太重，报社开了 4 条平行印刷线，每条线印不同页码段——并行工作，速度翻 4 倍。
+        </p>
+        <ul>
+            <li><strong>核心规则：</strong>同一个 Partition 内的消息严格有序（FIFO），不同 Partition 之间无顺序保证</li>
+            <li><strong>路由机制：</strong>Producer 发送时可指定 Key（如 orderId），相同 Key 的消息一定进同一 Partition，保证该 Key 的消息有序</li>
+            <li><strong>并行度上限：</strong>一个 Consumer Group 中，最多有"Partition 数"个 Consumer 同时消费（多出来的 Consumer 会空闲）</li>
+            <li><strong>例子：</strong><code>order-events</code> Topic 有 6 个 Partition，那么最多可以有 6 个 Consumer 并行消费。用户A的所有订单事件（Key=userA）始终在同一个 Partition，保证处理顺序</li>
+        </ul>
+
+        <h4>Offset（偏移量）—— 消费进度的"书签"</h4>
+        <p>
+            Offset 是每条消息在 Partition 内的唯一编号（从 0 递增），同时也是 Consumer 记录"我消费到哪了"的标记。
+            就像看连载小说时记住"我读到第 157 期了"——下次直接从 158 期开始，不用从创刊号翻起。
+        </p>
+        <ul>
+            <li><strong>消息Offset：</strong>Producer 写入的第 1 条消息是 offset=0，第 2 条是 offset=1，依次递增，永不重复</li>
+            <li><strong>消费Offset：</strong>Consumer 每消费一批消息后，提交当前消费到的 offset 位置（"我已读到第 157 条"）</li>
+            <li><strong>重要意义：</strong>Consumer 宕机重启后，从上次提交的 offset 继续消费，不会从头开始也不会跳过</li>
+            <li><strong>例子：</strong>Partition-0 当前有 1000 条消息（offset 0~999），Consumer 已提交 offset=500，那么下次拉取从 offset=500 开始</li>
+        </ul>
+
+        <h4>Consumer Group（消费者组）—— 协作消费的团队</h4>
+        <p>
+            Consumer Group 是一组 Consumer 实例的逻辑集合，组内成员<strong>分工协作</strong>消费同一个 Topic。
+            就像一个小区的报纸订阅——小区有 4 栋楼，安排 4 个投递员各负责一栋，每份报纸只投一次不重复。
+            但<strong>不同小区</strong>（不同 Consumer Group）各自独立收到完整的一份报纸，互不影响。
+        </p>
+        <ul>
+            <li><strong>核心规则：</strong>同一个 Group 内，每个 Partition 只能被一个 Consumer 消费（避免重复）；<strong>不同 Group 各自独立消费全量数据</strong>（这是 MQ 区别于点对点队列的关键）</li>
+            <li><strong>扩容方式：</strong>想提高消费速度？加 Consumer 实例到 Group 中（但不超过 Partition 数）</li>
+            <li><strong>例子：</strong><code>order-events</code> 有 4 个 Partition。Consumer Group "inventory-service"（库存服务）部署了 4 个实例，各消费 1 个 Partition 做扣库存。<strong>同时</strong>另一个 Group "analytics-service"（数据分析）也在独立消费同一 Topic 的全量数据做报表——两个 Group 互不干扰，各自维护自己的 Offset</li>
+        </ul>
+
+        <div class="callout">
+            <div class="callout-title">高频面试题：Consumer 数量与 Partition 数量不匹配时会怎样？</div>
+            <p>
+                假设 Topic 有 <strong>4 个 Partition</strong>（P0、P1、P2、P3），以下三种情况：
+            </p>
+        </div>
+
+        <div class="diagram">
+            <svg width="860" height="520" viewBox="0 0 860 520" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#10b981"/>
+                    </marker>
+                    <marker id="arrow-amber" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#f59e0b"/>
+                    </marker>
+                    <marker id="arrow-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#f87171"/>
+                    </marker>
+                </defs>
+
+                <!-- ===== 情况一：Consumer = Partition（理想） ===== -->
+                <text x="430" y="22" font-size="12" fill="#10b981" text-anchor="middle" font-weight="700">情况一：Consumer 数 = Partition 数 — 理想状态 ✓</text>
+
+                <!-- Partitions -->
+                <rect x="80" y="38" width="90" height="32" rx="4" fill="#1e1f23" stroke="#f59e0b" stroke-width="1.2"/>
+                <text x="125" y="58" font-size="10" fill="#fcd34d" text-anchor="middle" font-weight="600">P0</text>
+                <rect x="185" y="38" width="90" height="32" rx="4" fill="#1e1f23" stroke="#f59e0b" stroke-width="1.2"/>
+                <text x="230" y="58" font-size="10" fill="#fcd34d" text-anchor="middle" font-weight="600">P1</text>
+                <rect x="290" y="38" width="90" height="32" rx="4" fill="#1e1f23" stroke="#f59e0b" stroke-width="1.2"/>
+                <text x="335" y="58" font-size="10" fill="#fcd34d" text-anchor="middle" font-weight="600">P2</text>
+                <rect x="395" y="38" width="90" height="32" rx="4" fill="#1e1f23" stroke="#f59e0b" stroke-width="1.2"/>
+                <text x="440" y="58" font-size="10" fill="#fcd34d" text-anchor="middle" font-weight="600">P3</text>
+
+                <!-- Arrows -->
+                <line x1="125" y1="70" x2="125" y2="100" stroke="#10b981" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+                <line x1="230" y1="70" x2="230" y2="100" stroke="#10b981" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+                <line x1="335" y1="70" x2="335" y2="100" stroke="#10b981" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+                <line x1="440" y1="70" x2="440" y2="100" stroke="#10b981" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+
+                <!-- Consumers -->
+                <rect x="80" y="103" width="90" height="32" rx="4" fill="#0a1a0a" stroke="#10b981" stroke-width="1.2"/>
+                <text x="125" y="123" font-size="10" fill="#10b981" text-anchor="middle" font-weight="600">C0</text>
+                <rect x="185" y="103" width="90" height="32" rx="4" fill="#0a1a0a" stroke="#10b981" stroke-width="1.2"/>
+                <text x="230" y="123" font-size="10" fill="#10b981" text-anchor="middle" font-weight="600">C1</text>
+                <rect x="290" y="103" width="90" height="32" rx="4" fill="#0a1a0a" stroke="#10b981" stroke-width="1.2"/>
+                <text x="335" y="123" font-size="10" fill="#10b981" text-anchor="middle" font-weight="600">C2</text>
+                <rect x="395" y="103" width="90" height="32" rx="4" fill="#0a1a0a" stroke="#10b981" stroke-width="1.2"/>
+                <text x="440" y="123" font-size="10" fill="#10b981" text-anchor="middle" font-weight="600">C3</text>
+
+                <!-- Result -->
+                <text x="560" y="58" font-size="9" fill="#10b981" font-weight="600">每人 1 个 Partition</text>
+                <text x="560" y="76" font-size="9" fill="#94a3b8">负载均匀，吞吐最大</text>
+                <text x="560" y="94" font-size="9" fill="#94a3b8">无空闲、无过载</text>
+
+                <!-- ===== 分割线 ===== -->
+                <line x1="40" y1="155" x2="820" y2="155" stroke="#334155" stroke-width="0.5" stroke-dasharray="4"/>
+
+                <!-- ===== 情况二：Consumer < Partition（人手不足） ===== -->
+                <text x="430" y="180" font-size="12" fill="#f59e0b" text-anchor="middle" font-weight="700">情况二：Consumer 数 < Partition 数 — 负载加重 ⚠</text>
+
+                <!-- Partitions -->
+                <rect x="80" y="196" width="90" height="32" rx="4" fill="#1e1f23" stroke="#f59e0b" stroke-width="1.2"/>
+                <text x="125" y="216" font-size="10" fill="#fcd34d" text-anchor="middle" font-weight="600">P0</text>
+                <rect x="185" y="196" width="90" height="32" rx="4" fill="#1e1f23" stroke="#f59e0b" stroke-width="1.2"/>
+                <text x="230" y="216" font-size="10" fill="#fcd34d" text-anchor="middle" font-weight="600">P1</text>
+                <rect x="290" y="196" width="90" height="32" rx="4" fill="#1e1f23" stroke="#f59e0b" stroke-width="1.2"/>
+                <text x="335" y="216" font-size="10" fill="#fcd34d" text-anchor="middle" font-weight="600">P2</text>
+                <rect x="395" y="196" width="90" height="32" rx="4" fill="#1e1f23" stroke="#f59e0b" stroke-width="1.2"/>
+                <text x="440" y="216" font-size="10" fill="#fcd34d" text-anchor="middle" font-weight="600">P3</text>
+
+                <!-- Arrows: P0,P1 -> C0 -->
+                <line x1="125" y1="228" x2="170" y2="268" stroke="#f59e0b" stroke-width="1.8" marker-end="url(#arrow-amber)"/>
+                <line x1="230" y1="228" x2="200" y2="268" stroke="#f59e0b" stroke-width="1.8" marker-end="url(#arrow-amber)"/>
+                <!-- Arrows: P2,P3 -> C1 -->
+                <line x1="335" y1="228" x2="340" y2="268" stroke="#f59e0b" stroke-width="1.8" marker-end="url(#arrow-amber)"/>
+                <line x1="440" y1="228" x2="370" y2="268" stroke="#f59e0b" stroke-width="1.8" marker-end="url(#arrow-amber)"/>
+
+                <!-- Consumers (only 2) -->
+                <rect x="120" y="272" width="120" height="36" rx="4" fill="#1a1008" stroke="#f59e0b" stroke-width="1.5"/>
+                <text x="180" y="294" font-size="10" fill="#f59e0b" text-anchor="middle" font-weight="600">C0 ← P0, P1</text>
+                <rect x="290" y="272" width="120" height="36" rx="4" fill="#1a1008" stroke="#f59e0b" stroke-width="1.5"/>
+                <text x="350" y="294" font-size="10" fill="#f59e0b" text-anchor="middle" font-weight="600">C1 ← P2, P3</text>
+
+                <!-- Result -->
+                <text x="560" y="216" font-size="9" fill="#f59e0b" font-weight="600">每人扛 2 个 Partition</text>
+                <text x="560" y="234" font-size="9" fill="#94a3b8">单个 Consumer 负载翻倍</text>
+                <text x="560" y="252" font-size="9" fill="#94a3b8">消费速度变慢，可能堆积</text>
+                <text x="560" y="270" font-size="9" fill="#94a3b8">但所有 Partition 都有人消费</text>
+                <text x="560" y="292" font-size="8" fill="#64748b">→ 解决：加 Consumer 到 = Partition 数</text>
+
+                <!-- ===== 分割线 ===== -->
+                <line x1="40" y1="328" x2="820" y2="328" stroke="#334155" stroke-width="0.5" stroke-dasharray="4"/>
+
+                <!-- ===== 情况三：Consumer > Partition（人多活少） ===== -->
+                <text x="430" y="353" font-size="12" fill="#f87171" text-anchor="middle" font-weight="700">情况三：Consumer 数 > Partition 数 — 有人空闲 ✗</text>
+
+                <!-- Partitions -->
+                <rect x="80" y="369" width="90" height="32" rx="4" fill="#1e1f23" stroke="#f59e0b" stroke-width="1.2"/>
+                <text x="125" y="389" font-size="10" fill="#fcd34d" text-anchor="middle" font-weight="600">P0</text>
+                <rect x="185" y="369" width="90" height="32" rx="4" fill="#1e1f23" stroke="#f59e0b" stroke-width="1.2"/>
+                <text x="230" y="389" font-size="10" fill="#fcd34d" text-anchor="middle" font-weight="600">P1</text>
+                <rect x="290" y="369" width="90" height="32" rx="4" fill="#1e1f23" stroke="#f59e0b" stroke-width="1.2"/>
+                <text x="335" y="389" font-size="10" fill="#fcd34d" text-anchor="middle" font-weight="600">P2</text>
+                <rect x="395" y="369" width="90" height="32" rx="4" fill="#1e1f23" stroke="#f59e0b" stroke-width="1.2"/>
+                <text x="440" y="389" font-size="10" fill="#fcd34d" text-anchor="middle" font-weight="600">P3</text>
+
+                <!-- Arrows: P0->C0, P1->C1, P2->C2, P3->C3 -->
+                <line x1="125" y1="401" x2="85" y2="434" stroke="#10b981" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+                <line x1="230" y1="401" x2="195" y2="434" stroke="#10b981" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+                <line x1="335" y1="401" x2="305" y2="434" stroke="#10b981" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+                <line x1="440" y1="401" x2="415" y2="434" stroke="#10b981" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+
+                <!-- Consumers (6 total, last 2 idle) -->
+                <rect x="45" y="437" width="75" height="32" rx="4" fill="#0a1a0a" stroke="#10b981" stroke-width="1.2"/>
+                <text x="82" y="457" font-size="10" fill="#10b981" text-anchor="middle" font-weight="600">C0</text>
+                <rect x="135" y="437" width="75" height="32" rx="4" fill="#0a1a0a" stroke="#10b981" stroke-width="1.2"/>
+                <text x="172" y="457" font-size="10" fill="#10b981" text-anchor="middle" font-weight="600">C1</text>
+                <rect x="225" y="437" width="75" height="32" rx="4" fill="#0a1a0a" stroke="#10b981" stroke-width="1.2"/>
+                <text x="262" y="457" font-size="10" fill="#10b981" text-anchor="middle" font-weight="600">C2</text>
+                <rect x="315" y="437" width="75" height="32" rx="4" fill="#0a1a0a" stroke="#10b981" stroke-width="1.2"/>
+                <text x="352" y="457" font-size="10" fill="#10b981" text-anchor="middle" font-weight="600">C3</text>
+
+                <!-- Idle consumers with X -->
+                <rect x="425" y="437" width="75" height="32" rx="4" fill="#1a0a0a" stroke="#f87171" stroke-width="1.5" stroke-dasharray="3"/>
+                <text x="462" y="452" font-size="9" fill="#f87171" text-anchor="middle" font-weight="600">C4</text>
+                <text x="462" y="465" font-size="7" fill="#f87171" text-anchor="middle">空闲 idle</text>
+                <rect x="515" y="437" width="75" height="32" rx="4" fill="#1a0a0a" stroke="#f87171" stroke-width="1.5" stroke-dasharray="3"/>
+                <text x="552" y="452" font-size="9" fill="#f87171" text-anchor="middle" font-weight="600">C5</text>
+                <text x="552" y="465" font-size="7" fill="#f87171" text-anchor="middle">空闲 idle</text>
+
+                <!-- No arrow indicators for idle -->
+                <text x="490" y="420" font-size="8" fill="#f87171" text-anchor="middle">✗ 无 Partition 可分配</text>
+
+                <!-- Result -->
+                <text x="670" y="389" font-size="9" fill="#f87171" font-weight="600">C4、C5 完全空闲</text>
+                <text x="670" y="407" font-size="9" fill="#94a3b8">分不到 Partition，白白占资源</text>
+                <text x="670" y="425" font-size="9" fill="#94a3b8">加再多 Consumer 也没用</text>
+                <text x="670" y="447" font-size="8" fill="#64748b">→ 结论：Partition 数 = 并行度天花板</text>
+                <text x="670" y="465" font-size="8" fill="#64748b">→ 解决：先扩 Partition，再加 Consumer</text>
+
+                <!-- Bottom summary -->
+                <rect x="80" y="488" width="700" height="24" rx="4" fill="none" stroke="#334155" stroke-width="0.8"/>
+                <text x="430" y="504" font-size="9" fill="#94a3b8" text-anchor="middle">
+                    最佳实践：Partition 数 ≥ 预期峰值 Consumer 数 | Consumer 数 ≤ Partition 数 才有意义
+                </text>
+            </svg>
+            <div class="diagram-caption">图1-1：Consumer 数量与 Partition 数量的三种对应关系</div>
+        </div>
+
+        <div class="callout">
+            <div class="callout-title">实践建议</div>
+            <p>
+                设置 Partition 数 ≥ 预期最大 Consumer 数。
+                如果消费能力不足，优先扩 Partition + 加 Consumer；如果只加 Consumer 不扩 Partition，超出部分会空闲。
+            </p>
+        </div>
+
+        <h4>Replica（副本）与 Leader/Follower —— 数据不丢的保障</h4>
+        <p>
+            每个 Partition 可以有多个副本（Replica），分布在不同 Broker 上。其中一个是 <strong>Leader</strong>（负责所有读写），
+            其余是 <strong>Follower</strong>（从 Leader 同步数据作为备份）。
+            就像报社在北京、上海、广州各设一个印厂，北京是主厂（Leader）负责排版出稿，
+            上海和广州（Follower）实时同步内容——北京印厂如果停电，上海立即顶上继续出报。
+        </p>
+        <ul>
+            <li><strong>Leader：</strong>处理所有 Producer 写入和 Consumer 读取请求，是 Partition 的"活跃主本"</li>
+            <li><strong>Follower：</strong>持续从 Leader 拉取新数据保持同步，Leader 宕机时某个 Follower 会被选举为新 Leader（故障转移）</li>
+            <li><strong>典型配置：</strong>3 副本（1 Leader + 2 Follower），容忍 1 台 Broker 宕机不丢数据</li>
+            <li><strong>例子：</strong>Partition-0 的 Leader 在 Broker-0，两个 Follower 分别在 Broker-1 和 Broker-2。Broker-0 突然宕机，Broker-1 上的 Follower 被选为新 Leader，服务不中断、数据不丢失</li>
+        </ul>
+
+        <h4>Message / Record（消息）—— 数据传输的最小单位</h4>
+        <p>
+            一条消息是 MQ 中传输的最小数据单元，就像报纸上的一篇文章。它包含以下关键部分：
+        </p>
+        <ul>
+            <li><strong>Key（可选）：</strong>用于路由到特定 Partition（相同 Key 进同一 Partition），如 orderId、userId</li>
+            <li><strong>Value（必需）：</strong>消息体，即真正要传递的业务数据（如 JSON 格式的订单信息）</li>
+            <li><strong>Timestamp：</strong>消息创建或写入的时间戳</li>
+            <li><strong>Headers（可选）：</strong>附加元数据（如 traceId、来源服务名），不参与业务逻辑但便于追踪</li>
+            <li><strong>例子：</strong>一条订单消息可能是 Key=<code>"order_12345"</code>，Value=<code>{"userId":"U001","amount":99.9,"status":"created"}</code>，Header=<code>traceId:"abc123"</code></li>
+        </ul>
+
+        <div class="diagram">
+            <svg width="880" height="580" viewBox="0 0 880 580" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <marker id="arrowhead" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+                        <polygon points="0 0, 7 2.5, 0 5" fill="#475569"/>
+                    </marker>
+                    <marker id="arr-green" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+                        <polygon points="0 0, 7 2.5, 0 5" fill="#10b981"/>
+                    </marker>
+                    <marker id="arr-purple" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+                        <polygon points="0 0, 7 2.5, 0 5" fill="#c084fc"/>
+                    </marker>
+                    <marker id="arr-orange" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+                        <polygon points="0 0, 7 2.5, 0 5" fill="#fb923c"/>
+                    </marker>
+                </defs>
+
+                <!-- ============ Title ============ -->
+                <text x="440" y="20" font-size="13" fill="#f59e0b" text-anchor="middle" font-weight="700">消息队列核心角色全景图（以电商 order-events Topic 为例）</text>
+
+                <!-- ============================================================ -->
+                <!-- ROW 1: Producer  →  Broker/Topic/Partition  →  Consumer Groups -->
+                <!-- 高度: y=40 ~ y=320 -->
+                <!-- ============================================================ -->
+
+                <!-- === LEFT COLUMN: Producers (x=20~155) === -->
+                <rect x="20" y="50" width="135" height="190" rx="8" fill="#070f07" stroke="#10b981" stroke-width="1.5"/>
+                <text x="87" y="70" font-size="10" fill="#10b981" text-anchor="middle" font-weight="700">Producers</text>
+                <text x="87" y="83" font-size="7" fill="#64748b" text-anchor="middle">（消息生产方）</text>
+
+                <rect x="32" y="95" width="111" height="38" rx="4" fill="#0a1a0a" stroke="#10b981" stroke-width="0.8"/>
+                <text x="87" y="113" font-size="9" fill="#10b981" text-anchor="middle" font-weight="600">订单服务</text>
+                <text x="87" y="126" font-size="7" fill="#64748b" text-anchor="middle">Key = orderId</text>
+
+                <rect x="32" y="141" width="111" height="38" rx="4" fill="#0a1a0a" stroke="#10b981" stroke-width="0.8"/>
+                <text x="87" y="159" font-size="9" fill="#10b981" text-anchor="middle" font-weight="600">支付服务</text>
+                <text x="87" y="172" font-size="7" fill="#64748b" text-anchor="middle">Key = paymentId</text>
+
+                <rect x="32" y="187" width="111" height="38" rx="4" fill="#0a1a0a" stroke="#10b981" stroke-width="0.8"/>
+                <text x="87" y="205" font-size="9" fill="#10b981" text-anchor="middle" font-weight="600">用户服务</text>
+                <text x="87" y="218" font-size="7" fill="#64748b" text-anchor="middle">Key = userId</text>
+
+                <!-- === CENTER COLUMN: Broker Cluster (x=195~610) === -->
+                <rect x="195" y="40" width="415" height="280" rx="10" fill="#0d0d0f" stroke="#ff6b35" stroke-width="1.8"/>
+                <text x="402" y="62" font-size="11" fill="#ff6b35" text-anchor="middle" font-weight="700">Broker Cluster（3 节点）</text>
+
+                <!-- Broker node indicators -->
+                <rect x="215" y="72" width="80" height="18" rx="3" fill="#1a1008" stroke="#ff6b35" stroke-width="0.6"/>
+                <text x="255" y="84" font-size="7" fill="#ff6b35" text-anchor="middle" font-weight="600">Broker-0</text>
+                <rect x="362" y="72" width="80" height="18" rx="3" fill="#1a1008" stroke="#ff6b35" stroke-width="0.6"/>
+                <text x="402" y="84" font-size="7" fill="#ff6b35" text-anchor="middle" font-weight="600">Broker-1</text>
+                <rect x="509" y="72" width="80" height="18" rx="3" fill="#1a1008" stroke="#ff6b35" stroke-width="0.6"/>
+                <text x="549" y="84" font-size="7" fill="#ff6b35" text-anchor="middle" font-weight="600">Broker-2</text>
+
+                <!-- Topic box -->
+                <rect x="210" y="100" width="385" height="145" rx="6" fill="#12100a" stroke="#f59e0b" stroke-width="1"/>
+                <text x="402" y="118" font-size="9" fill="#f59e0b" text-anchor="middle" font-weight="700">Topic: order-events</text>
+
+                <!-- Partition-0 (Broker-0) -->
+                <rect x="222" y="128" width="110" height="55" rx="4" fill="#1e1f23" stroke="#d97706" stroke-width="1"/>
+                <text x="277" y="145" font-size="8" fill="#fcd34d" text-anchor="middle" font-weight="700">Partition-0</text>
+                <text x="277" y="159" font-size="7" fill="#10b981" text-anchor="middle">★ Leader</text>
+                <text x="277" y="173" font-size="6" fill="#94a3b8" text-anchor="middle">offset 0 → 1582</text>
+
+                <!-- Partition-1 (Broker-1) -->
+                <rect x="347" y="128" width="110" height="55" rx="4" fill="#1e1f23" stroke="#d97706" stroke-width="1"/>
+                <text x="402" y="145" font-size="8" fill="#fcd34d" text-anchor="middle" font-weight="700">Partition-1</text>
+                <text x="402" y="159" font-size="7" fill="#10b981" text-anchor="middle">★ Leader</text>
+                <text x="402" y="173" font-size="6" fill="#94a3b8" text-anchor="middle">offset 0 → 2034</text>
+
+                <!-- Partition-2 (Broker-2) -->
+                <rect x="472" y="128" width="110" height="55" rx="4" fill="#1e1f23" stroke="#d97706" stroke-width="1"/>
+                <text x="527" y="145" font-size="8" fill="#fcd34d" text-anchor="middle" font-weight="700">Partition-2</text>
+                <text x="527" y="159" font-size="7" fill="#10b981" text-anchor="middle">★ Leader</text>
+                <text x="527" y="173" font-size="6" fill="#94a3b8" text-anchor="middle">offset 0 → 1897</text>
+
+                <!-- Replica row (Follower) -->
+                <text x="402" y="200" font-size="7" fill="#475569" text-anchor="middle">─────── Follower 副本（灾备） ───────</text>
+                <rect x="222" y="208" width="110" height="24" rx="3" fill="#0a0a0a" stroke="#334155" stroke-width="0.5" stroke-dasharray="2"/>
+                <text x="277" y="224" font-size="6" fill="#64748b" text-anchor="middle">Follower: P1, P2</text>
+                <rect x="347" y="208" width="110" height="24" rx="3" fill="#0a0a0a" stroke="#334155" stroke-width="0.5" stroke-dasharray="2"/>
+                <text x="402" y="224" font-size="6" fill="#64748b" text-anchor="middle">Follower: P0, P2</text>
+                <rect x="472" y="208" width="110" height="24" rx="3" fill="#0a0a0a" stroke="#334155" stroke-width="0.5" stroke-dasharray="2"/>
+                <text x="527" y="224" font-size="6" fill="#64748b" text-anchor="middle">Follower: P0, P1</text>
+
+                <!-- Routing explanation -->
+                <text x="402" y="244" font-size="7" fill="#64748b" text-anchor="middle">路由规则：hash(Key) % partitionCount → 决定消息写入哪个 Partition</text>
+
+                <!-- Key routing example inside Broker area -->
+                <text x="220" y="262" font-size="7" fill="#94a3b8">例: hash("order_A") % 3 = 0 → P0</text>
+                <text x="220" y="275" font-size="7" fill="#94a3b8">例: hash("order_B") % 3 = 1 → P1</text>
+                <text x="420" y="262" font-size="7" fill="#94a3b8">同一 Key 的消息始终进入同一 Partition</text>
+                <text x="420" y="275" font-size="7" fill="#94a3b8">→ 保证该 Key 下的消息严格有序</text>
+
+                <!-- Other topics (condensed) -->
+                <text x="402" y="303" font-size="8" fill="#475569" text-anchor="middle">（集群中还有 payment-events、user-events 等其他 Topic，结构同上）</text>
+
+                <!-- === RIGHT COLUMN: Consumer Groups (x=650~870) === -->
+
+                <!-- Group A -->
+                <rect x="650" y="50" width="215" height="145" rx="8" fill="#0d060f" stroke="#c084fc" stroke-width="1.5"/>
+                <text x="757" y="69" font-size="9" fill="#c084fc" text-anchor="middle" font-weight="700">Consumer Group A</text>
+                <text x="757" y="82" font-size="7" fill="#64748b" text-anchor="middle">groupId = "inventory-service"（库存服务）</text>
+
+                <rect x="662" y="92" width="90" height="44" rx="4" fill="#1a0a1a" stroke="#c084fc" stroke-width="0.8"/>
+                <text x="707" y="109" font-size="8" fill="#c084fc" text-anchor="middle" font-weight="600">Consumer-1</text>
+                <text x="707" y="122" font-size="6" fill="#94a3b8" text-anchor="middle">← P0</text>
+                <text x="707" y="132" font-size="6" fill="#64748b" text-anchor="middle">offset: 1580</text>
+
+                <rect x="762" y="92" width="90" height="44" rx="4" fill="#1a0a1a" stroke="#c084fc" stroke-width="0.8"/>
+                <text x="807" y="109" font-size="8" fill="#c084fc" text-anchor="middle" font-weight="600">Consumer-2</text>
+                <text x="807" y="122" font-size="6" fill="#94a3b8" text-anchor="middle">← P1</text>
+                <text x="807" y="132" font-size="6" fill="#64748b" text-anchor="middle">offset: 2030</text>
+
+                <rect x="712" y="144" width="90" height="44" rx="4" fill="#1a0a1a" stroke="#c084fc" stroke-width="0.8"/>
+                <text x="757" y="161" font-size="8" fill="#c084fc" text-anchor="middle" font-weight="600">Consumer-3</text>
+                <text x="757" y="174" font-size="6" fill="#94a3b8" text-anchor="middle">← P2</text>
+                <text x="757" y="184" font-size="6" fill="#64748b" text-anchor="middle">offset: 1895</text>
+
+                <!-- Group B -->
+                <rect x="650" y="210" width="215" height="105" rx="8" fill="#0f0d06" stroke="#fb923c" stroke-width="1.5"/>
+                <text x="757" y="229" font-size="9" fill="#fb923c" text-anchor="middle" font-weight="700">Consumer Group B</text>
+                <text x="757" y="242" font-size="7" fill="#64748b" text-anchor="middle">groupId = "analytics-service"（数据分析）</text>
+
+                <rect x="680" y="253" width="155" height="44" rx="4" fill="#1a0a08" stroke="#fb923c" stroke-width="0.8"/>
+                <text x="757" y="270" font-size="8" fill="#fb923c" text-anchor="middle" font-weight="600">Consumer-A（单实例）</text>
+                <text x="757" y="283" font-size="6" fill="#94a3b8" text-anchor="middle">← P0(offset:800), P1(offset:1200), P2(offset:950)</text>
+
+                <!-- ============ ARROWS ============ -->
+
+                <!-- Producer → Broker (single clean arrow) -->
+                <line x1="155" y1="145" x2="193" y2="145" stroke="#10b981" stroke-width="2" marker-end="url(#arr-green)"/>
+                <text x="174" y="138" font-size="7" fill="#10b981" text-anchor="middle">写入</text>
+
+                <!-- Broker → Consumer Group A (per-partition arrows) -->
+                <line x1="332" y1="150" x2="332" y2="150" stroke="none"/>
+                <!-- P0 → C1 -->
+                <path d="M332,150 Q490,90 660,110" fill="none" stroke="#c084fc" stroke-width="1.3" marker-end="url(#arr-purple)"/>
+                <!-- P1 → C2 -->
+                <path d="M457,150 Q550,100 760,110" fill="none" stroke="#c084fc" stroke-width="1.3" marker-end="url(#arr-purple)"/>
+                <!-- P2 → C3 -->
+                <path d="M582,155 Q620,165 710,163" fill="none" stroke="#c084fc" stroke-width="1.3" marker-end="url(#arr-purple)"/>
+
+                <!-- Broker → Consumer Group B (all partitions → single consumer) -->
+                <!-- P0 → A -->
+                <path d="M332,183 Q420,260 678,270" fill="none" stroke="#fb923c" stroke-width="1" stroke-dasharray="4" marker-end="url(#arr-orange)"/>
+                <!-- P1 → A -->
+                <path d="M457,183 Q520,250 678,273" fill="none" stroke="#fb923c" stroke-width="1" stroke-dasharray="4" marker-end="url(#arr-orange)"/>
+                <!-- P2 → A -->
+                <path d="M582,183 Q620,250 678,276" fill="none" stroke="#fb923c" stroke-width="1" stroke-dasharray="4" marker-end="url(#arr-orange)"/>
+
+                <!-- Arrow labels -->
+                <text x="620" y="93" font-size="7" fill="#c084fc">每个 Partition</text>
+                <text x="620" y="103" font-size="7" fill="#c084fc">→ 组内1个Consumer</text>
+
+                <text x="620" y="248" font-size="7" fill="#fb923c">3个 Partition</text>
+                <text x="620" y="258" font-size="7" fill="#fb923c">→ 全部给1个Consumer</text>
+
+                <!-- ============================================================ -->
+                <!-- ROW 2: 数据流转说明 (y=340 ~ y=570) -->
+                <!-- ============================================================ -->
+                <rect x="20" y="340" width="840" height="230" rx="8" fill="#0a0a0c" stroke="#334155" stroke-width="1"/>
+                <text x="440" y="362" font-size="11" fill="#f59e0b" text-anchor="middle" font-weight="700">一条消息的完整生命周期</text>
+
+                <!-- Step 1 -->
+                <rect x="40" y="378" width="26" height="18" rx="9" fill="#10b981"/>
+                <text x="53" y="391" font-size="9" fill="#fff" text-anchor="middle" font-weight="700">1</text>
+                <text x="76" y="391" font-size="9" fill="#10b981" font-weight="600">Producer 发送</text>
+                <text x="76" y="408" font-size="8" fill="#94a3b8">订单服务发送: Key="order_123", Value={amount:99.9, status:"created"}</text>
+                <text x="76" y="422" font-size="8" fill="#94a3b8">路由计算: hash("order_123") % 3 = 1 → 消息进入 <tspan fill="#fcd34d">Partition-1</tspan></text>
+
+                <!-- Step 2 -->
+                <rect x="40" y="440" width="26" height="18" rx="9" fill="#ff6b35"/>
+                <text x="53" y="453" font-size="9" fill="#fff" text-anchor="middle" font-weight="700">2</text>
+                <text x="76" y="453" font-size="9" fill="#ff6b35" font-weight="600">Broker 持久化</text>
+                <text x="76" y="470" font-size="8" fill="#94a3b8">Partition-1 Leader（Broker-1）追加写入日志，分配 offset = 2035</text>
+                <text x="76" y="484" font-size="8" fill="#94a3b8">Broker-0 和 Broker-2 上的 Follower 同步复制该消息（保证数据安全）</text>
+
+                <!-- Step 3 -->
+                <rect x="460" y="378" width="26" height="18" rx="9" fill="#c084fc"/>
+                <text x="473" y="391" font-size="9" fill="#fff" text-anchor="middle" font-weight="700">3</text>
+                <text x="496" y="391" font-size="9" fill="#c084fc" font-weight="600">Group A 消费（库存服务）</text>
+                <text x="496" y="408" font-size="8" fill="#94a3b8">Consumer-2 负责 P1，拉取到 offset=2035 的新消息</text>
+                <text x="496" y="422" font-size="8" fill="#94a3b8">执行扣减库存 → 成功 → 提交 offset=2035（记录进度）</text>
+
+                <!-- Step 4 -->
+                <rect x="460" y="440" width="26" height="18" rx="9" fill="#fb923c"/>
+                <text x="473" y="453" font-size="9" fill="#fff" text-anchor="middle" font-weight="700">4</text>
+                <text x="496" y="453" font-size="9" fill="#fb923c" font-weight="600">Group B 消费（数据分析）</text>
+                <text x="496" y="470" font-size="8" fill="#94a3b8">Consumer-A 也拉取到 P1 的 offset=2035（<tspan fill="#fb923c">独立的 offset</tspan>）</text>
+                <text x="496" y="484" font-size="8" fill="#94a3b8">写入数据仓库生成报表 → 提交自己的 offset=2035</text>
+
+                <!-- Key takeaway -->
+                <rect x="80" y="505" width="720" height="50" rx="6" fill="#1a1400" stroke="#f59e0b" stroke-width="0.8"/>
+                <text x="440" y="524" font-size="10" fill="#f59e0b" text-anchor="middle" font-weight="700">⚡ 同一条消息被 Group A 和 Group B 各消费一次 —— 发布-订阅模型的精髓</text>
+                <text x="440" y="542" font-size="8" fill="#94a3b8" text-anchor="middle">两个 Group 各自维护独立的 Offset，消费进度互不影响。Group A 消费快慢不影响 Group B。</text>
+            </svg>
+            <div class="diagram-caption">图1-0：核心概念全景图 — 完整展示 Producer→Broker(Topic/Partition/Replica)→Consumer Group 的数据流转与消费关系</div>
+        </div>
+
+        <div class="callout">
+            <div class="callout-title">面试高频追问：Partition 数量怎么定？</div>
+            <p>
+                经验公式：<strong>Partition 数 = max(生产端峰值吞吐 / 单Partition写入能力, 消费端期望并行度)</strong>。
+                通常 6~12 个 Partition 能满足大部分场景。注意：Kafka 的 Partition 数只能增不能减（扩容容易缩容难），
+                所以前期适当预留，但也不要过多（每个 Partition 占用内存、文件句柄和选举开销）。
+            </p>
+        </div>
+
         <h3>一句话定位</h3>
 
         <div class="table-wrapper">
@@ -226,11 +722,15 @@
         <div class="qa-block">
             <div class="qa-question">为什么不直接用数据库做消息传递？MQ存在的本质价值是什么？</div>
             <div class="qa-answer">
-                数据库做消息传递有三个致命问题：①轮询开销大（消费者需要不断 SELECT）；
-                ②竞争锁严重（多消费者抢同一行记录）；③无法水平扩展（单表成瓶颈）。
-                MQ的本质价值是提供了一个<strong>高吞吐、可水平扩展、支持发布订阅语义的有序日志抽象</strong>，
+                <p><strong>数据库做消息传递有三个致命问题：</strong><br>
+                ①<strong>轮询开销大</strong>——消费者需要不断 SELECT 轮询新消息，高频轮询浪费CPU和数据库连接，低频轮询延迟高；<br>
+                ②<strong>竞争锁严重</strong>——多消费者同时消费同一张表，需要行锁/乐观锁来避免重复消费，高并发下锁冲突导致吞吐骤降；<br>
+                ③<strong>无法水平扩展</strong>——单表写入成瓶颈，分表又引入分布式事务和顺序性问题，复杂度指数级上升。<br><br>
+                <strong>MQ的本质价值：</strong>提供了一个<strong>高吞吐、可水平扩展、支持发布订阅语义的有序日志抽象</strong>，
                 使得生产者和消费者在时间维度（异步）和空间维度（解耦）上完全独立。
-                就像高速公路比红绿灯路口高效——不是因为路更好，而是消除了等待和冲突。
+                具体而言：Push/Pull 语义让消费者无需轮询；Partition 机制天然支持水平扩展；
+                Consumer Group 实现负载均衡而无需加锁。<br><br>
+                <strong>类比：</strong>就像高速公路比红绿灯路口高效——不是因为路更好，而是消除了等待和冲突。</p>
             </div>
         </div>
     </section>
@@ -580,34 +1080,42 @@ producer.send(new ProducerRecord&lt;&gt;("order-events", orderId, orderJson), (m
         <div class="qa-block">
             <div class="qa-question">Kafka 为什么吞吐量这么高？</div>
             <div class="qa-answer">
-                四大核心原因：①<strong>顺序写磁盘</strong>——Partition 日志只追加写，顺序IO比随机IO快3个数量级；
-                ②<strong>Page Cache</strong>——利用操作系统的页缓存，热数据直接在内存中，避免JVM GC；
+                <p><strong>四大核心原因：</strong><br>
+                ①<strong>顺序写磁盘</strong>——Partition 日志只追加写，顺序IO比随机IO快3个数量级；<br>
+                ②<strong>Page Cache</strong>——利用操作系统的页缓存，热数据直接在内存中，避免JVM GC；<br>
                 ③<strong>零拷贝（Zero-Copy）</strong>——消费路径通过 <code>java.nio.channels.FileChannel.transferTo()</code>
-                调用底层 <code>sendfile()</code> 系统调用，数据不经过用户态，省去两次上下文切换。
-                传统路径：磁盘→Page Cache→用户态Buffer→Socket Buffer→网卡（4次拷贝、4次上下文切换），
-                sendfile()路径：磁盘→Page Cache→Socket Buffer→网卡（3次拷贝：2次DMA+1次CPU拷贝、2次上下文切换）。
-                注意：sendfile() 仍需将数据从 Page Cache 拷贝到 Socket Buffer（1次CPU拷贝），
-                只有在网卡支持 scatter-gather DMA 时才能跳过这一步实现真正的0次CPU拷贝；
+                调用底层 <code>sendfile()</code> 系统调用，数据不经过用户态，省去两次上下文切换。<br>
+                &nbsp;&nbsp;传统路径：磁盘→Page Cache→用户态Buffer→Socket Buffer→网卡（4次拷贝、4次上下文切换）<br>
+                &nbsp;&nbsp;sendfile()路径：磁盘→Page Cache→Socket Buffer→网卡（3次拷贝：2次DMA+1次CPU拷贝、2次上下文切换）<br>
+                &nbsp;&nbsp;注意：sendfile() 仍需将数据从 Page Cache 拷贝到 Socket Buffer（1次CPU拷贝），
+                只有在网卡支持 scatter-gather DMA 时才能跳过这一步实现真正的0次CPU拷贝；<br>
                 ④<strong>批量 + 压缩</strong>——Producer端批量凑包发送（RecordBatch），减少网络RTT和系统调用次数，
                 加上LZ4/Snappy/Zstd压缩减少网络带宽占用。整个 batch 作为一个整体压缩、传输、存储，
-                Consumer 端解压，Broker 端无需解压再压缩（pass-through），这是 Kafka 独有的"端到端压缩"设计。
+                Consumer 端解压，Broker 端无需解压再压缩（pass-through），这是 Kafka 独有的"端到端压缩"设计。</p>
             </div>
         </div>
 
         <div class="qa-block">
             <div class="qa-question">ZooKeeper 在 Kafka 中扮演什么角色？为什么要去掉它（KRaft）？</div>
             <div class="qa-answer">
-                ZooKeeper 在旧版 Kafka 中负责：①Broker 注册与发现；②Controller 选举；③Topic/Partition 元数据存储；
+                <p><strong>ZooKeeper 在旧版 Kafka 中的职责：</strong><br>
+                ①Broker 注册与发现；<br>
+                ②Controller 选举；<br>
+                ③Topic/Partition 元数据存储；<br>
                 ④Consumer Group offset 存储（0.9之前）。<br><br>
-                去掉的原因：①ZK成为扩展瓶颈（元数据写入串行化）；②运维复杂度（需要额外维护ZK集群）；
+                <strong>去掉的原因：</strong><br>
+                ①ZK成为扩展瓶颈（元数据写入串行化）；<br>
+                ②运维复杂度（需要额外维护ZK集群）；<br>
                 ③Controller 切换时需要从ZK全量加载元数据，大集群恢复时间长（分钟级）。<br><br>
-                KRaft 模式演进：Kafka 3.3（2022）标记 KRaft 为 GA；
-                <strong>Kafka 4.0（2024年3月）完全移除了 ZooKeeper 代码</strong>，KRaft 成为唯一的元数据管理方式。
-                KRaft 的核心设计：选出一组 Controller 节点（通常3或5个）组成 Quorum，
+                <strong>KRaft 模式演进：</strong><br>
+                - Kafka 3.3（2022）标记 KRaft 为 GA；<br>
+                - <strong>Kafka 4.0（2024年3月）完全移除了 ZooKeeper 代码</strong>，KRaft 成为唯一的元数据管理方式。<br><br>
+                <strong>KRaft 的核心设计：</strong><br>
+                选出一组 Controller 节点（通常3或5个）组成 Quorum，
                 使用 Raft 协议管理集群元数据日志（__cluster_metadata topic）。
-                Active Controller 负责写入，其他 Controller 作为热备（Standby）从 Raft 日志复制状态。
-                Controller 切换恢复秒级完成（无需全量加载元数据，因为状态在 Raft 日志中已持久化）。
-                到2026年，所有新部署的 Kafka 集群都应该且只能使用 KRaft 模式。
+                Active Controller 负责写入，其他 Controller 作为热备（Standby）从 Raft 日志复制状态。<br>
+                Controller 切换恢复秒级完成（无需全量加载元数据，因为状态在 Raft 日志中已持久化）。<br>
+                到2026年，所有新部署的 Kafka 集群都应该且只能使用 KRaft 模式。</p>
             </div>
         </div>
     </section>
@@ -939,7 +1447,7 @@ TransactionSendResult result = producer.sendMessageInTransaction(msg, null);
         <div class="qa-block">
             <div class="qa-question">RocketMQ 的 CommitLog 为什么要混合存储所有 Topic？和 Kafka 每个 Partition 独立文件相比有什么优劣？</div>
             <div class="qa-answer">
-                <strong>混合存储的核心优势：</strong>当 Topic 数量非常多时（如电商场景可能有上万个Topic），
+                <p><strong>混合存储的核心优势：</strong>当 Topic 数量非常多时（如电商场景可能有上万个Topic），
                 Kafka 模型下每个 Partition 是独立文件，大量 Partition 同时活跃时，写入变成频繁的文件描述符切换，
                 OS 的 Page Cache 被分散到数千个文件中难以有效利用，磁盘 IO 调度器面对大量并发写入退化为近似随机写。
                 实测数据：Kafka 在 Partition 数超过数千时，写入吞吐可能下降 50% 以上（LinkedIn 早期就观察到这一现象）。
@@ -948,14 +1456,14 @@ TransactionSendResult result = producer.sendMessageInTransaction(msg, null);
                 而且当某个 Topic 的消息量极大时，该 Topic 的消息散布在 CommitLog 各处，消费产生大量随机读（Page Cache 命中率下降）。
                 此时 Kafka 的"单 Partition 顺序读"优势明显。<br><br>
                 <strong>总结：</strong>多 Topic 少消费（或消费紧跟生产尾部） → RocketMQ 更优；少 Topic 大吞吐（或有大量消费积压回溯） → Kafka 更优。
-                这也是为什么 RocketMQ 适合电商场景（万级 Topic，每个 Topic 消息量不大），Kafka 适合数据管道场景（少量 Topic，海量数据）。
+                这也是为什么 RocketMQ 适合电商场景（万级 Topic，每个 Topic 消息量不大），Kafka 适合数据管道场景（少量 Topic，海量数据）。</p>
             </div>
         </div>
 
         <div class="qa-block">
             <div class="qa-question">RocketMQ 的 NameServer 和 Kafka 的 ZooKeeper/KRaft 有什么本质区别？</div>
             <div class="qa-answer">
-                三点本质区别：<br>
+                <p>三点本质区别：<br>
                 ①<strong>一致性模型不同</strong>：ZK/KRaft 是 CP（强一致性），NameServer 是 AP（最终一致性）。
                 NameServer 各节点互不通信，可能存在短暂的路由不一致（最长30秒心跳周期）。<br>
                 ②<strong>职责范围不同</strong>：ZK/KRaft 负责选举+元数据+协调+分区分配，
@@ -963,7 +1471,7 @@ TransactionSendResult result = producer.sendMessageInTransaction(msg, null);
                 ③<strong>复杂度不同</strong>：ZK 是独立的分布式协调服务（ZAB协议），KRaft 需要 Raft 日志复制，
                 NameServer 就是个内存Map（brokerAddrTable/topicRouteTable）+心跳检测+过期剔除，几千行代码搞定。<br>
                 ④<strong>故障影响不同</strong>：所有 NameServer 全部宕机时，已运行的 Producer/Consumer 仍可正常工作（路由缓存在本地），
-                只是无法感知路由变更。而 ZK 全部宕机时，Kafka Controller 失效，无法进行 Leader 选举和 Partition 分配。
+                只是无法感知路由变更。而 ZK 全部宕机时，Kafka Controller 失效，无法进行 Leader 选举和 Partition 分配。</p>
             </div>
         </div>
     </section>
@@ -1276,7 +1784,7 @@ producer.newMessage()
         <div class="qa-block">
             <div class="qa-question">Pulsar 的存算分离相比 Kafka 有什么具体的优势和劣势？</div>
             <div class="qa-answer">
-                <strong>优势：</strong><br>
+                <p><strong>优势：</strong><br>
                 ①<strong>弹性伸缩快</strong>：加减 Broker 秒级生效，Kafka 需要 partition reassignment（可能数小时）；<br>
                 ②<strong>故障恢复快</strong>：Broker 无状态，宕机后其他 Broker 立即接管，Kafka 需要 ISR 追赶；<br>
                 ③<strong>存储无限扩展</strong>：Bookie 可独立扩容，不受单机磁盘限制；<br>
@@ -1285,14 +1793,14 @@ producer.newMessage()
                 ①<strong>运维复杂</strong>：需要维护 Broker + BookKeeper + ZK/Oxia 三套集群（Oxia 正在简化这一点）；<br>
                 ②<strong>延迟略高</strong>：写路径多一跳（Broker→Bookie），P99延迟通常高于 Kafka；<br>
                 ③<strong>生态成熟度</strong>：社区规模和工具链不如 Kafka 丰富；<br>
-                ④<strong>端到端性能</strong>：极致吞吐场景下，Kafka 的零拷贝+顺序读仍有优势。
+                ④<strong>端到端性能</strong>：极致吞吐场景下，Kafka 的零拷贝+顺序读仍有优势。</p>
             </div>
         </div>
 
         <div class="qa-block">
             <div class="qa-question">Pulsar 的 Segment（Ledger）机制相比 Kafka 的 Partition 有什么本质不同？</div>
             <div class="qa-answer">
-                Kafka 的 Partition 是一个<strong>长生命周期的、绑定在特定 Broker 上的</strong>日志文件。
+                <p>Kafka 的 Partition 是一个<strong>长生命周期的、绑定在特定 Broker 上的</strong>日志文件。
                 一旦创建，数据就"钉死"在那台机器上，直到被 reassign。
                 Kafka 的 Log Segment 只是同一 Partition 内的文件分片（按1GB或时间滚动），仍然在同一台 Broker 上。<br><br>
                 Pulsar 的 Topic Partition 由一连串<strong>短生命周期的 Ledger</strong> 串联而成。
@@ -1304,7 +1812,7 @@ producer.newMessage()
                 ②<strong>扩容即可用</strong>：新加的 Bookie 会立即被新 Ledger 使用，无需迁移旧数据；<br>
                 ③<strong>容量均衡</strong>：通过条带化写入，集群存储空间自动均衡利用。<br><br>
                 类比：Kafka 的 Partition 像一个不可移动的保险箱，Pulsar 的 Ledger 像可以随时换仓库的集装箱。
-                代价：Ledger 切换时需要向元数据服务（ZK/Oxia）更新元数据，引入少量延迟尖刺（Spike）。
+                代价：Ledger 切换时需要向元数据服务（ZK/Oxia）更新元数据，引入少量延迟尖刺（Spike）。</p>
             </div>
         </div>
     </section>
@@ -1765,20 +2273,20 @@ while (true) {
         <div class="qa-block">
             <div class="qa-question">即使用了 acks=all + 副本3 + min.insync.replicas=2，消息还可能丢吗？</div>
             <div class="qa-answer">
-                可能！有三种极端情况：<br>
+                <p>可能！有三种极端情况：<br>
                 ①<strong>所有ISR节点同时宕机</strong>：物理机房断电，PageCache中未fsync的数据丢失。
                 解决方案：跨机房部署 或 配置 log.flush.interval.messages=1（性能会降到1/10）。<br>
                 ②<strong>unclean.leader.election.enable被误开</strong>：运维误配置，非ISR副本当选Leader，导致数据截断。<br>
                 ③<strong>Producer 设置了 buffer.memory 不够 + block 超时</strong>：消息在 Producer 缓冲区被丢弃（抛出BufferExhaustedException），
                 而业务代码未捕获异常。<br><br>
-                所以真正的"不丢消息"需要端到端设计：Producer异常捕获+本地持久化兜底，不能仅依赖MQ配置。
+                所以真正的"不丢消息"需要端到端设计：Producer异常捕获+本地持久化兜底，不能仅依赖MQ配置。</p>
             </div>
         </div>
 
         <div class="qa-block">
             <div class="qa-question">RocketMQ 的同步刷盘（SYNC_FLUSH）和异步刷盘（ASYNC_FLUSH）怎么选？</div>
             <div class="qa-answer">
-                <strong>同步刷盘：</strong>消息写入磁盘文件后才返回ACK给Producer。单机宕机0丢失。
+                <p><strong>同步刷盘：</strong>消息写入磁盘文件后才返回ACK给Producer。单机宕机0丢失。
                 但吞吐降到2-3万TPS，适合金融/支付场景（如银行转账通知）。<br><br>
                 <strong>异步刷盘 + 同步双写（SYNC_MASTER）：</strong>这是阿里推荐的"次优可靠"方案。
                 消息写入Master内存后同步复制到Slave，然后返回ACK。
@@ -1787,7 +2295,7 @@ while (true) {
                 <strong>极端场景注意：</strong>即使是 SYNC_FLUSH + SYNC_MASTER，如果 Master 和 Slave 同时断电
                 （如同机房同机架），且此时 PageCache 中有未 fsync 的数据（ASYNC_FLUSH 场景）或物理磁盘损坏，
                 仍可能丢失数据。真正的"零丢失"需要跨机房/跨AZ部署副本。<br><br>
-                <strong>阿里双11的实际配置：</strong>ASYNC_FLUSH + SYNC_MASTER（可靠性与性能的最佳平衡点）。
+                <strong>阿里双11的实际配置：</strong>ASYNC_FLUSH + SYNC_MASTER（可靠性与性能的最佳平衡点）。</p>
             </div>
         </div>
     </section>
@@ -1937,11 +2445,12 @@ consumer.registerMessageListener(new MessageListenerOrderly() {
         <div class="qa-block">
             <div class="qa-question">Kafka Partition 数量变化后，之前按Key路由的顺序还能保证吗？</div>
             <div class="qa-answer">
-                <strong>不能！</strong>Partition 扩容后，key.hashCode() % newPartitionCount 的结果可能变化，
+                <p><strong>不能！</strong>Partition 扩容后，key.hashCode() % newPartitionCount 的结果可能变化，
                 同一 Key 的消息可能被路由到不同的 Partition。这是 Kafka 顺序消息的"隐形炸弹"。<br><br>
-                解决方案：①建Topic时预估好Partition数，尽量不扩容；
-                ②如果必须扩容，在扩容期间暂停相关Producer，等存量消息消费完毕后再切换路由逻辑；
-                ③使用自定义Partitioner，基于一致性哈希减少Key重映射的比例。
+                <strong>解决方案：</strong><br>
+                ①建Topic时预估好Partition数，尽量不扩容；<br>
+                ②如果必须扩容，在扩容期间暂停相关Producer，等存量消息消费完毕后再切换路由逻辑；<br>
+                ③使用自定义Partitioner，基于一致性哈希减少Key重映射的比例。</p>
             </div>
         </div>
     </section>
@@ -2112,7 +2621,7 @@ public void consumeOrderEvent(MessageExt msg) {
         <div class="qa-block">
             <div class="qa-question">Kafka 的 Exactly-Once 语义是真正的"恰好一次"吗？有什么限制？</div>
             <div class="qa-answer">
-                严格来说，Kafka 的 Exactly-Once（EOS）有明确的适用范围和演进历史：<br><br>
+                <p>严格来说，Kafka 的 Exactly-Once（EOS）有明确的适用范围和演进历史：<br><br>
                 <strong>Kafka 0.11（2017）引入 EOS：</strong>Idempotent Producer + Transactional API<br>
                 <strong>Kafka 2.5（2020）：</strong>改进事务恢复性能，减少事务协调器failover时间<br>
                 <strong>Kafka 3.0（2021）：</strong>默认开启幂等（enable.idempotence=true），EOS 成为默认行为<br><br>
@@ -2127,7 +2636,7 @@ public void consumeOrderEvent(MessageExt msg) {
                 实现"效果等价于恰好一次"，而非真正的"恰好投递一次"。
                 在分布式系统中，你无法区分"消息发送后对方处理很慢"和"消息丢失"（这是两将军问题的本质），
                 因此真正的 Exactly-Once Delivery 理论上不可能——只有 Exactly-Once Processing（通过幂等实现）。
-                端到端的不重不丢永远需要业务配合（幂等消费+去重表）。
+                端到端的不重不丢永远需要业务配合（幂等消费+去重表）。</p>
             </div>
         </div>
     </section>
@@ -2320,26 +2829,26 @@ while (true) {
         <div class="qa-block">
             <div class="qa-question">RocketMQ 事务消息有什么局限性？实际使用中有哪些坑？</div>
             <div class="qa-answer">
-                五个主要局限：<br>
+                <p>五个主要局限：<br>
                 ①<strong>不支持批量事务</strong>：每次 sendMessageInTransaction 只能发一条消息，无法在一个事务中发多条；<br>
                 ②<strong>回查依赖Producer存活</strong>：如果Producer整个服务下线，回查无法到达，事务将一直悬挂（需要超时策略）；<br>
                 ③<strong>不支持延迟+事务组合</strong>：事务消息不能同时是延迟消息；<br>
                 ④<strong>事务消息不支持Tag过滤</strong>：事务消息会被存到特殊的Half Topic，Tag信息在提交前不可用；<br>
                 ⑤<strong>回查幂等问题</strong>：回查可能多次触发，checkLocalTransaction 必须能幂等地查询本地事务状态。<br><br>
-                <strong>生产实践建议：</strong>本地事务表记录事务状态（orderId → status），回查时直接查表返回。
+                <strong>生产实践建议：</strong>本地事务表记录事务状态（orderId → status），回查时直接查表返回。</p>
             </div>
         </div>
 
         <div class="qa-block">
             <div class="qa-question">不用MQ事务消息，还有什么方案能保证"本地事务+消息发送"的一致性？</div>
             <div class="qa-answer">
-                <strong>本地消息表（Transactional Outbox Pattern）：</strong><br>
+                <p><strong>本地消息表（Transactional Outbox Pattern）：</strong><br>
                 ①业务操作和"写消息表"在同一个本地事务中（同一DB）；<br>
                 ②后台线程/定时任务扫描消息表，将未发送的消息投递到MQ；<br>
                 ③发送成功后更新消息表状态为"已发送"。<br><br>
                 优势：不依赖MQ的事务能力，任何MQ都适用。Debezium CDC + Kafka 的 Outbox 模式就是这个思路的工业级实现。<br><br>
                 <strong>对比：</strong>RocketMQ事务消息 = MQ层面的解决方案（侵入MQ）；
-                本地消息表 = 应用层面的解决方案（侵入DB）。二者各有优劣。
+                本地消息表 = 应用层面的解决方案（侵入DB）。二者各有优劣。</p>
             </div>
         </div>
     </section>
@@ -2513,14 +3022,14 @@ public void pollDelayedMessages() {
         <div class="qa-block">
             <div class="qa-question">订单30分钟超时关闭，用延迟消息和定时任务扫表两种方案各有什么优劣？</div>
             <div class="qa-answer">
-                <strong>延迟消息方案：</strong><br>
+                <p><strong>延迟消息方案：</strong><br>
                 优势：实时性好（精确到秒级），无需定时扫描，不会给DB带来压力。<br>
                 劣势：依赖MQ的延迟消息能力（Kafka不支持），且延迟期间如果订单已支付，消息到达时需要额外判断。<br><br>
                 <strong>定时任务扫表方案：</strong><br>
                 优势：不依赖MQ特性，逻辑简单可控，任何MQ都适用。<br>
                 劣势：定时任务有扫描间隔（如1分钟扫一次），精度不如延迟消息；数据量大时DB压力高。<br><br>
                 <strong>生产最佳实践：</strong>大厂通常用延迟消息（阿里用RocketMQ延迟消息），
-                但消费端仍需做幂等判断（订单可能已被用户支付），收到延迟消息时需检查订单当前状态。
+                但消费端仍需做幂等判断（订单可能已被用户支付），收到延迟消息时需检查订单当前状态。</p>
             </div>
         </div>
     </section>
@@ -2705,14 +3214,14 @@ consumer.subscribe(Collections.singletonList("order-events"), new ConsumerRebala
         <div class="qa-block">
             <div class="qa-question">生产环境中 Kafka Consumer 频繁 Rebalance 怎么排查？</div>
             <div class="qa-answer">
-                排查步骤：<br>
+                <p>排查步骤：<br>
                 ①<strong>看日志</strong>：搜索 "Revoke" / "Rebalance" / "Member xxx has left"，确认是哪个Consumer离开；<br>
                 ②<strong>区分原因</strong>：<br>
                 &nbsp;&nbsp;- "member failed to send heartbeat" → session.timeout.ms 太短，或 Consumer 所在机器 GC / 网络抖动<br>
                 &nbsp;&nbsp;- "consumer poll timeout" → max.poll.interval.ms 不够，单次消费耗时太长<br>
                 &nbsp;&nbsp;- "member voluntarily left" → 代码中调用了 close() 或优雅停机<br>
                 ③<strong>解决方案</strong>：加大 session.timeout (25-45s)、加大 max.poll.interval (5-10min)、
-                减小 max.poll.records、优化消费逻辑耗时、使用 CooperativeStickyAssignor。
+                减小 max.poll.records、优化消费逻辑耗时、使用 CooperativeStickyAssignor。</p>
             </div>
         </div>
     </section>
@@ -2772,12 +3281,12 @@ consumer.setPullBatchSize(64); // 增大单次拉取量</code></pre>
         <div class="qa-block">
             <div class="qa-question">如果Kafka积压了1000万条消息，你的处理步骤是什么？</div>
             <div class="qa-answer">
-                ①<strong>定位原因</strong>：看Consumer Lag监控，确认是哪个Consumer Group/哪些Partition堆积；检查消费者日志是否有异常；<br>
+                <p>①<strong>定位原因</strong>：看Consumer Lag监控，确认是哪个Consumer Group/哪些Partition堆积；检查消费者日志是否有异常；<br>
                 ②<strong>判断时效</strong>：如果消息已超时效（如30分钟前的推送通知），直接 seekToEnd 跳过；<br>
                 ③<strong>快速止血</strong>：如果消息仍有价值，立即水平扩容Consumer（确保不超过Partition数）；<br>
                 ④<strong>极端方案</strong>：如果单条消费太慢无法短期修复，创建一个临时Topic（比如有50个Partition），
                 部署一个转发Consumer把积压消息快速转发到临时Topic，然后部署50个消费者并行处理临时Topic；<br>
-                ⑤<strong>事后复盘</strong>：补充Lag监控告警、优化消费逻辑、评估是否需要扩Partition。
+                ⑤<strong>事后复盘</strong>：补充Lag监控告警、优化消费逻辑、评估是否需要扩Partition。</p>
             </div>
         </div>
     </section>
@@ -3018,14 +3527,14 @@ consumer.setPullBatchSize(64); // 增大单次拉取量</code></pre>
         <div class="qa-block">
             <div class="qa-question">为什么 Kafka 的顺序写这么快？具体快在哪里？</div>
             <div class="qa-answer">
-                磁盘的物理特性决定了顺序写和随机写的巨大差距：<br>
+                <p>磁盘的物理特性决定了顺序写和随机写的巨大差距：<br>
                 <strong>机械硬盘(HDD)：</strong>顺序写 ~100-200MB/s，随机写 ~100-200KB/s（差1000倍！原因是寻道时间 ~10ms）<br>
                 <strong>固态硬盘(SSD)：</strong>顺序写 ~500MB/s，随机写 ~50MB/s（差10倍，因为SSD无寻道但有写放大和GC）<br><br>
                 Kafka 追加写入只需要：①磁头持续写不动（HDD）或 ②连续填充 NAND Block（SSD）。
                 完全消除了寻道时间和随机IO。配合 OS 的 Page Cache 预读 + 顺序写合并（writeback），
                 实际写入性能可以逼近内存带宽。<br><br>
                 LinkedIn 的基准测试：单Broker单Partition顺序写入达到 <strong>800MB/s</strong>（未开复制），
-                这就是为什么 Kafka 的吞吐量能达到百万级 TPS。
+                这就是为什么 Kafka 的吞吐量能达到百万级 TPS。</p>
             </div>
         </div>
     </section>
@@ -3320,7 +3829,7 @@ Producer 通过 metadata 刷新感知新 Leader，重新路由请求
         <div class="qa-block">
             <div class="qa-question">Kafka 的 HW（High Watermark）机制有什么缺陷？Leader Epoch 是怎么改进的？</div>
             <div class="qa-answer">
-                <strong>HW 的缺陷（Kafka 0.11 之前）：</strong><br>
+                <p><strong>HW 的缺陷（Kafka 0.11 之前）：</strong><br>
                 场景：Leader LEO=5, HW=3; Follower LEO=4, HW=3。Follower 先宕机重启，
                 按照规则截断到 HW=3。此时如果 Leader 也宕机，Follower 成为新 Leader，
                 数据 offset=3 和 offset=4 丢失了——即使原来 Follower 已经拥有 offset=3 的数据。<br><br>
@@ -3328,14 +3837,14 @@ Producer 通过 metadata 刷新感知新 Leader，重新路由请求
                 引入 (Epoch, StartOffset) 记录。Follower 重启后不直接截断到 HW，
                 而是先向 Leader 请求 "你的 Epoch X 最后写到哪？"（OffsetsForLeaderEpoch 请求）。
                 Leader 返回准确位置，Follower 只截断真正不一致的部分。
-                这避免了上述"双重宕机导致数据丢失"的问题。
+                这避免了上述"双重宕机导致数据丢失"的问题。</p>
             </div>
         </div>
 
         <div class="qa-block">
             <div class="qa-question">Pulsar 的 Broker 无状态是真的完全无状态吗？故障切换有多快？</div>
             <div class="qa-answer">
-                <strong>不是100%无状态，但"近似"无状态：</strong><br>
+                <p><strong>不是100%无状态，但"近似"无状态：</strong><br>
                 Broker 在内存中维护了：①Topic ownership 信息；②Managed Ledger Cache（热数据缓存）；
                 ③Cursor（消费位点快照）。但这些都可以从 BookKeeper/ZK 中快速重建。<br><br>
                 <strong>故障切换速度：</strong><br>
@@ -3344,7 +3853,7 @@ Producer 通过 metadata 刷新感知新 Leader，重新路由请求
                 ③新 Broker 打开对应 Ledger，重建 Cursor：百毫秒级；<br>
                 ④整体 E2E 恢复：通常 <strong>5-15秒</strong>。<br><br>
                 对比 Kafka：Kafka 恢复需要等新 Leader 的 Follower 追上数据（如果 ISR 已缩小），
-                极端情况可能需要分钟级。Pulsar 因为数据在 BookKeeper 中是完整的，无需追赶。
+                极端情况可能需要分钟级。Pulsar 因为数据在 BookKeeper 中是完整的，无需追赶。</p>
             </div>
         </div>
     </section>
@@ -3564,7 +4073,7 @@ maxReconsumeTimes=16                 # 最大重试次数(超出进入DLQ)</code
         <div class="qa-block">
             <div class="qa-question">如果让你从零设计一个消息队列，你会怎么设计？需要考虑哪些核心问题？</div>
             <div class="qa-answer">
-                这是一道开放题，考查系统设计能力。推荐分层回答：<br><br>
+                <p>这是一道开放题，考查系统设计能力。推荐分层回答：<br><br>
                 <strong>1. 存储层设计：</strong><br>
                 - 选择追加写日志结构（Append-only Log），利用顺序IO获取高吞吐<br>
                 - 设计分段（Segment）机制方便过期数据清理<br>
@@ -3592,14 +4101,14 @@ maxReconsumeTimes=16                 # 最大重试次数(超出进入DLQ)</code
                 - 延迟消息：时间轮 or 延迟队列<br>
                 - 事务消息：半消息 + 回查<br>
                 - 死信队列：消费重试兜底<br>
-                - 消息过滤：Broker 端减少无效网络传输
+                - 消息过滤：Broker 端减少无效网络传输</p>
             </div>
         </div>
 
         <div class="qa-block">
             <div class="qa-question">消息队列在微服务架构中的最佳实践有哪些？有哪些反模式需要避免？</div>
             <div class="qa-answer">
-                <strong>最佳实践：</strong><br>
+                <p><strong>最佳实践：</strong><br>
                 ①<strong>Topic 命名规范：</strong>{业务域}-{动作}-{版本}，如 order-created-v1、payment-completed-v1<br>
                 ②<strong>消息体设计：</strong>使用 Schema（Avro/Protobuf）而非裸 JSON，保证向前向后兼容<br>
                 ③<strong>幂等设计前置：</strong>消费者从设计之初就按幂等实现，不要事后补<br>
@@ -3611,7 +4120,7 @@ maxReconsumeTimes=16                 # 最大重试次数(超出进入DLQ)</code
                 ②<strong>超大消息：</strong>传10MB的文件内容到MQ，直接打爆Broker内存<br>
                 ③<strong>消费端无限重试：</strong>消费失败无限重试不进死信，导致消息堆积越来越多<br>
                 ④<strong>一个Topic万能化：</strong>所有事件塞一个Topic，不同消费者各取所需——导致互相影响、无法独立扩缩<br>
-                ⑤<strong>不监控Lag：</strong>消费堆积发现不及时，用户反馈才知道系统已经瘫痪
+                ⑤<strong>不监控Lag：</strong>消费堆积发现不及时，用户反馈才知道系统已经瘫痪</p>
             </div>
         </div>
     </section>
