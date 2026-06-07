@@ -1376,7 +1376,7 @@ SHOW ENGINE INNODB STATUS\G
   <p>假设你要从银行账户A转100元到账户B，这需要两步操作：① A的余额减100；② B的余额加100。如果第①步执行成功后数据库突然崩溃，第②步还没执行——钱从A扣了，但B没收到。这100元就"消失"了。</p>
   <p><strong>事务（Transaction）</strong>就是把多个操作打包成一个"要么全做、要么全不做"的原子单元。数据库保证：如果中途出了任何问题，所有已经做的修改都会被自动撤销，数据回到事务开始前的状态。</p>
   <p>事务的四大特性用ACID概括：<strong>A</strong>tomicity（原子性）——不可分割，全做或全不做；<strong>C</strong>onsistency（一致性）——事务前后数据满足所有约束；<strong>I</strong>solation（隔离性）——并发事务互不干扰；<strong>D</strong>urability（持久性）——一旦提交，修改永久保存，即使宕机也不丢失。</p>
-  <pre style="background: #1a1a2e; color: #e2e8f0; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 14px;">
+  <pre style="background: #1a1a2e; color: #e2e8f0; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 0.85rem;">
 <span style="color: #7c8aaa;">-- 银行转账：事务的基本用法</span>
 <span style="color: #c792ea;">BEGIN</span>;  <span style="color: #7c8aaa;">-- 开启事务</span>
 
@@ -1531,6 +1531,7 @@ SHOW VARIABLES LIKE 'innodb_flush_log_at_trx_commit';
     </div>
 
     <h3>四种隔离级别</h3>
+    <div class="table-wrapper">
     <table>
       <tr>
         <th>隔离级别</th>
@@ -1568,6 +1569,7 @@ SHOW VARIABLES LIKE 'innodb_flush_log_at_trx_commit';
         <td>所有SELECT加共享锁</td>
       </tr>
     </table>
+    </div>
 
     <div class="key-point">MySQL InnoDB默认隔离级别是<strong>REPEATABLE READ</strong>（可重复读）。这与Oracle默认的READ COMMITTED不同，面试常考。</div>
 
@@ -1575,42 +1577,79 @@ SHOW VARIABLES LIKE 'innodb_flush_log_at_trx_commit';
 
     <h4>脏读（Dirty Read）</h4>
     <p>读到了其他事务<strong>尚未提交</strong>的数据。如果那个事务回滚了，你读到的就是"从未存在过"的数据。</p>
-    <pre><code class="sql">-- Session A                        -- Session B
-BEGIN;                              BEGIN;
-UPDATE account SET balance=0 
-  WHERE id=1;
-                                    -- READ UNCOMMITTED下能读到balance=0
-                                    SELECT balance FROM account WHERE id=1;
-ROLLBACK;  -- A回滚了！
-                                    -- B基于"幽灵数据"做了业务决策，灾难性错误</code></pre>
+    <div class="trx-timeline">
+      <div class="trx-legend">
+        <span><i class="dot-a"></i>Session A</span>
+        <span><i class="dot-b"></i>Session B (READ UNCOMMITTED)</span>
+      </div>
+      <div class="trx-step session-a">
+        <span class="trx-label">Session A</span>
+        <code>BEGIN;
+UPDATE account SET balance=0 WHERE id=1;</code>
+      </div>
+      <div class="trx-step session-b">
+        <span class="trx-label">Session B</span>
+        <code>SELECT balance FROM account WHERE id=1;</code>
+        <div class="trx-note">READ UNCOMMITTED 下读到 balance=0（A尚未提交！）</div>
+      </div>
+      <div class="trx-step session-a step-result">
+        <span class="trx-label">Session A</span>
+        <code>ROLLBACK;</code>
+        <div class="trx-note"><strong>A回滚了！B基于"幽灵数据"做了业务决策 → 灾难</strong></div>
+      </div>
+    </div>
 
     <h4>不可重复读（Non-Repeatable Read）</h4>
     <p>同一事务中两次读同一行，结果不同——因为中间有其他事务<strong>提交了UPDATE</strong>。</p>
-    <pre><code class="sql">-- Session A (RC级别)               -- Session B
-BEGIN;
-SELECT balance FROM account 
-  WHERE id=1;  -- 读到1000
-                                    BEGIN;
-                                    UPDATE account SET balance=500 WHERE id=1;
-                                    COMMIT;
-
-SELECT balance FROM account 
-  WHERE id=1;  -- 读到500！两次不一致
-COMMIT;</code></pre>
+    <div class="trx-timeline">
+      <div class="trx-legend">
+        <span><i class="dot-a"></i>Session A (RC级别)</span>
+        <span><i class="dot-b"></i>Session B</span>
+      </div>
+      <div class="trx-step session-a">
+        <span class="trx-label">Session A</span>
+        <code>BEGIN;
+SELECT balance FROM account WHERE id=1;</code>
+        <div class="trx-note">读到 balance=1000</div>
+      </div>
+      <div class="trx-step session-b">
+        <span class="trx-label">Session B</span>
+        <code>BEGIN;
+UPDATE account SET balance=500 WHERE id=1;
+COMMIT;</code>
+      </div>
+      <div class="trx-step session-a step-result">
+        <span class="trx-label">Session A</span>
+        <code>SELECT balance FROM account WHERE id=1;</code>
+        <div class="trx-note"><strong>读到 balance=500！同一事务内两次读取不一致</strong></div>
+      </div>
+    </div>
 
     <h4>幻读（Phantom Read）</h4>
     <p>同一事务中两次范围查询，第二次多出了行——因为其他事务<strong>INSERT了新行</strong>。</p>
-    <pre><code class="sql">-- Session A                        -- Session B
-BEGIN;
-SELECT * FROM orders 
-  WHERE amount > 100;  -- 返回3行
-                                    BEGIN;
-                                    INSERT INTO orders(amount) VALUES(200);
-                                    COMMIT;
-
-SELECT * FROM orders 
-  WHERE amount > 100;  -- 返回4行！多了一行"幽灵"
-COMMIT;</code></pre>
+    <div class="trx-timeline">
+      <div class="trx-legend">
+        <span><i class="dot-a"></i>Session A</span>
+        <span><i class="dot-b"></i>Session B</span>
+      </div>
+      <div class="trx-step session-a">
+        <span class="trx-label">Session A</span>
+        <code>BEGIN;
+SELECT * FROM orders WHERE amount > 100;</code>
+        <div class="trx-note">返回 3 行</div>
+      </div>
+      <div class="trx-step session-b">
+        <span class="trx-label">Session B</span>
+        <code>BEGIN;
+INSERT INTO orders(amount) VALUES(200);
+COMMIT;</code>
+      </div>
+      <div class="trx-step session-a step-result">
+        <span class="trx-label">Session A</span>
+        <code>SELECT * FROM orders WHERE amount > 100;</code>
+        <div class="trx-note"><strong>返回 4 行！多了一行"幽灵" → 幻读</strong></div>
+      </div>
+    </div>
 
     <h3>InnoDB各隔离级别的内核实现差异</h3>
     <pre><code class="sql">-- 查看和设置隔离级别
@@ -1746,6 +1785,7 @@ SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;</code></pre>
 
     <h3>ReadView的结构和可见性判断</h3>
     <p>ReadView是事务在执行快照读（普通SELECT）时创建的数据结构，包含四个关键字段：</p>
+    <div class="table-wrapper">
     <table>
       <tr>
         <th>字段</th>
@@ -1768,6 +1808,7 @@ SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;</code></pre>
         <td>创建该ReadView的事务自己的ID</td>
       </tr>
     </table>
+    </div>
 
     <h3>可见性判断算法</h3>
     <p>对于版本链中的每个版本，InnoDB按以下规则判断该版本对当前事务是否可见：</p>
@@ -1849,27 +1890,38 @@ function is_visible(trx_id, read_view):
     </div>
 
     <h3>RC vs RR：ReadView生成时机的差异</h3>
-    <pre><code class="sql">-- 场景演示：理解RC和RR的本质区别
--- 假设初始数据：id=1, name='张三'
-
--- Session A (trx_id=100)          -- Session B (trx_id=200, RR级别)
-BEGIN;                              BEGIN;
-                                    SELECT name FROM user WHERE id=1;
-                                    -- RR: 此时创建ReadView, m_ids=[100]
-                                    -- 结果: name='张三'
-
-UPDATE user SET name='李四' 
-  WHERE id=1;
-COMMIT;
-                                    SELECT name FROM user WHERE id=1;
-                                    -- RR: 复用旧ReadView, trx_id=100仍在m_ids中
-                                    -- 虽然100已提交，但ReadView认为它"活跃" → 不可见
-                                    -- 结果仍然: name='张三' ✓ 可重复读！
-                                    
-                                    -- 如果是RC级别:
-                                    -- 此时创建新ReadView, m_ids=[]（100已提交不在列表中）
-                                    -- trx_id=100 < max_trx_id 且不在m_ids → 可见
-                                    -- 结果: name='李四' （看到了新提交的数据）</code></pre>
+    <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:0.5rem;">场景：初始数据 id=1, name='张三'</p>
+    <div class="trx-timeline">
+      <div class="trx-legend">
+        <span><i class="dot-a"></i>Session A (trx_id=100)</span>
+        <span><i class="dot-b"></i>Session B (trx_id=200, RR)</span>
+      </div>
+      <div class="trx-step session-a">
+        <span class="trx-label">Session A</span>
+        <code>BEGIN;</code>
+      </div>
+      <div class="trx-step session-b">
+        <span class="trx-label">Session B</span>
+        <code>BEGIN;
+SELECT name FROM user WHERE id=1;</code>
+        <div class="trx-note"><strong>RR：</strong>此时创建 ReadView，m_ids=[100]<br>结果：name='张三'</div>
+      </div>
+      <div class="trx-step session-a">
+        <span class="trx-label">Session A</span>
+        <code>UPDATE user SET name='李四' WHERE id=1;
+COMMIT;</code>
+        <div class="trx-note">事务A已提交，trx_id=100 不再活跃</div>
+      </div>
+      <div class="trx-step session-b">
+        <span class="trx-label">Session B</span>
+        <code>SELECT name FROM user WHERE id=1;</code>
+        <div class="trx-note"><strong>RR：</strong>复用旧 ReadView，trx_id=100 仍在 m_ids 中 → 不可见<br>结果仍然：name='张三' (可重复读)</div>
+      </div>
+      <div class="trx-step session-b step-success">
+        <span class="trx-label">如果是 RC 级别</span>
+        <div class="trx-note">此时创建<strong>新</strong>ReadView，m_ids=[]（100已提交不在列表中）<br>trx_id=100 &lt; max_trx_id 且不在 m_ids → 可见<br>结果：name='李四'（看到了新提交的数据）</div>
+      </div>
+    </div>
 
     <div class="key-point">面试黄金回答：MVCC = 隐藏列(trx_id + roll_pointer) + undo log版本链 + ReadView。RC在每次执行SELECT时新建ReadView，RR在事务首次执行快照读时创建ReadView并在整个事务期间复用（注意不是BEGIN时创建）。可见性判断就是拿版本的trx_id和ReadView的四个字段做比较，沿版本链从新到旧找到第一个可见版本。</div>
   </div>
@@ -1902,26 +1954,44 @@ DELETE FROM user WHERE id=1;            -- 先当前读找到行，再标记删�
     </div>
 
     <h3>为什么DML必须是当前读？</h3>
-    <p>设想如果UPDATE基于快照读：</p>
-    <pre><code class="sql">-- 如果UPDATE基于快照读（实际不会，这是反面教材）
--- 初始: balance = 1000
-
--- Session A                        -- Session B
-BEGIN;                              BEGIN;
--- 快照读看到balance=1000
-UPDATE account SET balance = 
-  balance - 100 WHERE id=1;
--- 基于快照: 1000-100=900
-COMMIT;
-                                    -- 快照读也看到balance=1000（旧快照）
-                                    UPDATE account SET balance = 
-                                      balance - 200 WHERE id=1;
-                                    -- 基于快照: 1000-200=800
-                                    COMMIT;
--- 最终balance=800，但正确应该是700！丢失了A的更新！
-
--- 所以UPDATE必须当前读：
--- B的UPDATE会读到A提交后的最新值900，然后900-200=700 ✓</code></pre>
+    <p>设想如果UPDATE基于快照读（反面教材）：</p>
+    <div class="trx-timeline">
+      <div class="trx-legend">
+        <span><i class="dot-a"></i>Session A</span>
+        <span><i class="dot-b"></i>Session B</span>
+        <span style="margin-left:auto;font-style:italic;">初始 balance=1000</span>
+      </div>
+      <div class="trx-step session-a">
+        <span class="trx-label">Session A</span>
+        <code>BEGIN;</code>
+        <div class="trx-note">快照读看到 balance=1000</div>
+      </div>
+      <div class="trx-step session-b">
+        <span class="trx-label">Session B</span>
+        <code>BEGIN;</code>
+        <div class="trx-note">快照读也看到 balance=1000（旧快照）</div>
+      </div>
+      <div class="trx-step session-a">
+        <span class="trx-label">Session A</span>
+        <code>UPDATE account SET balance = balance - 100 WHERE id=1;
+COMMIT;</code>
+        <div class="trx-note">基于快照：1000-100=900</div>
+      </div>
+      <div class="trx-step session-b">
+        <span class="trx-label">Session B</span>
+        <code>UPDATE account SET balance = balance - 200 WHERE id=1;
+COMMIT;</code>
+        <div class="trx-note">基于快照：1000-200=800</div>
+      </div>
+      <div class="trx-step step-result">
+        <span class="trx-label" style="background:rgba(239,68,68,0.1);color:#ef4444;">结果</span>
+        <div class="trx-note"><strong>最终 balance=800，但正确应该是700！丢失了A的更新！</strong></div>
+      </div>
+      <div class="trx-step step-success">
+        <span class="trx-label" style="background:rgba(34,197,94,0.1);color:#16a34a;">正确行为</span>
+        <div class="trx-note">UPDATE必须当前读：B的UPDATE会读到A提交后的最新值900，然后 900-200=<strong>700</strong></div>
+      </div>
+    </div>
 
     <div class="key-point">快照读通过MVCC实现无锁并发读；当前读通过加锁保证读到最新数据并防止并发修改冲突。两者共同构成InnoDB的并发控制体系。</div>
   </div>
@@ -1960,37 +2030,42 @@ INSERT INTO t(c) VALUES(22);  -- 成功！22不在被锁范围内</code></pre>
 
     <h3>RR仍然可能出现"幻读"的场景</h3>
     <p>关键场景：<strong>快照读和当前读混用时</strong>，可以观察到"幻象"：</p>
+    <p style="font-size:0.85rem;color:var(--text-muted);">表结构：CREATE TABLE t (id INT PRIMARY KEY, c INT); 初始数据：(1,1), (2,2)</p>
 
-    <pre><code class="sql">-- 经典幻读复现场景
--- 表: CREATE TABLE t (id INT PRIMARY KEY, c INT);
--- 初始数据: (1, 1), (2, 2)
-
--- Session A (RR级别)               -- Session B
-BEGIN;                              
-SELECT * FROM t WHERE c = 3;
--- 快照读，返回空集（ReadView已创建）
-
-                                    BEGIN;
-                                    INSERT INTO t VALUES(3, 3);
-                                    COMMIT;
-
--- 此时Session A再做快照读：
-SELECT * FROM t WHERE c = 3;
--- 仍然返回空集 ✓（MVCC保护，ReadView不变）
-
--- 但如果Session A执行当前读或UPDATE：
-UPDATE t SET c = 30 WHERE c = 3;
--- 当前读能看到Session B插入的(3,3)，更新成功！
--- Query OK, 1 row affected
-
--- 再做快照读：
-SELECT * FROM t;
--- 返回 (1,1), (2,2), (3,30) ！！！
--- 第三行"突然出现"了 → 这就是幻读！
-
--- 原因：UPDATE是当前读，修改了(3,3)为(3,30)
--- 修改后该行的trx_id变成了Session A自己的事务ID
--- 再快照读时，creator_trx_id匹配 → 可见</code></pre>
+    <div class="trx-timeline">
+      <div class="trx-legend">
+        <span><i class="dot-a"></i>Session A (RR级别)</span>
+        <span><i class="dot-b"></i>Session B</span>
+      </div>
+      <div class="trx-step session-a">
+        <span class="trx-label">Session A</span>
+        <code>BEGIN;
+SELECT * FROM t WHERE c = 3;</code>
+        <div class="trx-note">快照读，返回空集（ReadView 已创建）</div>
+      </div>
+      <div class="trx-step session-b">
+        <span class="trx-label">Session B</span>
+        <code>BEGIN;
+INSERT INTO t VALUES(3, 3);
+COMMIT;</code>
+        <div class="trx-note">插入了 (3, 3) 并提交</div>
+      </div>
+      <div class="trx-step session-a">
+        <span class="trx-label">Session A - 再次快照读</span>
+        <code>SELECT * FROM t WHERE c = 3;</code>
+        <div class="trx-note">仍然返回空集 (MVCC保护，ReadView不变)</div>
+      </div>
+      <div class="trx-step session-a step-result">
+        <span class="trx-label">Session A - 当前读/UPDATE</span>
+        <code>UPDATE t SET c = 30 WHERE c = 3;</code>
+        <div class="trx-note"><strong>当前读能看到 Session B 插入的 (3,3)，更新成功！</strong><br>Query OK, 1 row affected</div>
+      </div>
+      <div class="trx-step session-a step-result">
+        <span class="trx-label">Session A - 再次快照读</span>
+        <code>SELECT * FROM t;</code>
+        <div class="trx-note"><strong>返回 (1,1), (2,2), (3,30)！第三行"突然出现" → 幻读！</strong><br>原因：UPDATE 是当前读，修改后该行的 trx_id 变成了 Session A 自己的事务 ID → creator_trx_id 匹配 → 可见</div>
+      </div>
+    </div>
 
     <div class="key-point">
       面试结论：RR级别下，纯快照读不会幻读（MVCC保障）；纯当前读不会幻读（Next-Key Lock保障）。但<strong>快照读和当前读混用</strong>时，仍可能出现幻读。要完全避免幻读，要么用SERIALIZABLE级别，要么在业务首次读就用 <code>SELECT ... FOR UPDATE</code>（当前读加锁）。
@@ -2863,7 +2938,7 @@ public void deductStock(Long productId, int qty) { ... }</code></pre>
   <p>想象一个公共厕所只有一个坑位。如果没有门锁，两个人可能同时冲进去——结果可想而知。数据库的锁就是这个"门锁"：当一个事务正在修改某行数据时，通过加锁阻止其他事务同时修改同一行，避免数据混乱。</p>
   <p>具体来说，如果两个事务同时对同一行执行UPDATE，没有锁机制的话，可能出现"丢失更新"：事务A读到余额1000，事务B也读到1000；A减100写入900，B减200也基于1000写入800——A的修改被覆盖了。</p>
   <p>MySQL InnoDB中最基本的两类锁：<strong>共享锁（S Lock / 读锁）</strong>——多个事务可以同时持有，允许并发读取；<strong>排他锁（X Lock / 写锁）</strong>——只有一个事务能持有，其他事务读写都要等待。写锁与任何锁互斥，读锁之间互相兼容。</p>
-  <pre style="background: #1a1a2e; color: #e2e8f0; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 14px;">
+  <pre style="background: #1a1a2e; color: #e2e8f0; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 0.85rem;">
 <span style="color: #7c8aaa;">-- 共享锁（读锁）：其他事务可以读，但不能改</span>
 <span style="color: #c792ea;">SELECT</span> * <span style="color: #c792ea;">FROM</span> accounts <span style="color: #c792ea;">WHERE</span> user_id = <span style="color: #c3e88d;">'A'</span> <span style="color: #c792ea;">LOCK IN SHARE MODE</span>;
 
@@ -2880,7 +2955,8 @@ public void deductStock(Long productId, int qty) { ... }</code></pre>
 
       <!-- 锁兼容矩阵 SVG -->
       <h4>四、锁兼容矩阵</h4>
-      <svg width="520" height="320" viewBox="0 0 520 320" xmlns="http://www.w3.org/2000/svg" style="display:block;margin:16px auto;">
+      <div class="svg-container">
+      <svg width="520" height="320" viewBox="0 0 520 320" xmlns="http://www.w3.org/2000/svg">
         <defs>
           <style>
             .matrix-header { font:bold 14px monospace; fill:#1565C0; }
@@ -2947,6 +3023,7 @@ public void deductStock(Long productId, int qty) { ... }</code></pre>
         <rect x="390" y="241" width="70" height="44" class="cell-bg-red" rx="4"/>
         <text x="430" y="270" class="matrix-cell incompatible" text-anchor="middle">冲突</text>
       </svg>
+      </div>
 
       <h4>五、SQL演示</h4>
       <pre><code class="sql">-- 查看当前InnoDB锁信息（MySQL 8.0+）
@@ -2980,6 +3057,7 @@ SELECT * FROM orders WHERE id = 1 FOR UPDATE;
       <p>这三种锁是InnoDB在<strong>Repeatable Read</strong>隔离级别下解决幻读问题的核心机制。从源码角度看，它们其实是同一个锁结构（<code>lock_t</code>）的不同flag组合：</p>
 
       <h4>一、三种锁的定义</h4>
+      <div class="table-wrapper">
       <table style="width:100%;border-collapse:collapse;margin:16px 0;">
         <thead>
           <tr style="background:#E3F2FD;">
@@ -3010,9 +3088,11 @@ SELECT * FROM orders WHERE id = 1 FOR UPDATE;
           </tr>
         </tbody>
       </table>
+      </div>
 
       <h4>二、Next-Key Lock = Record Lock + Gap Lock 范围图示</h4>
-      <svg width="700" height="280" viewBox="0 0 700 280" xmlns="http://www.w3.org/2000/svg" style="display:block;margin:16px auto;">
+      <div class="svg-container">
+      <svg width="700" height="280" viewBox="0 0 700 280" xmlns="http://www.w3.org/2000/svg">
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
             <polygon points="0 0, 10 3.5, 0 7" fill="#333"/>
@@ -3049,6 +3129,7 @@ SELECT * FROM orders WHERE id = 1 FOR UPDATE;
         <rect x="180" y="240" width="280" height="32" fill="#E3F2FD" stroke="#1565C0" stroke-width="2" rx="6"/>
         <text x="320" y="261" text-anchor="middle" font-size="13" font-weight="bold" fill="#1565C0">Next-Key Lock = (10, 15] 左开右闭</text>
       </svg>
+      </div>
 
       <h4>三、加锁规则（MySQL 8.0 RR级别）</h4>
       <p>这是我在内核开发中总结的加锁规则，面试高频考点：</p>
@@ -3189,16 +3270,39 @@ SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;</code></pre>
       </ul>
 
       <h4>二、经典死锁场景</h4>
-      <pre><code class="sql">-- 场景：两个事务交叉更新两行记录
-
--- 事务A                              -- 事务B
-BEGIN;                                 BEGIN;
-UPDATE t SET d=d+1 WHERE id=5;        UPDATE t SET d=d+1 WHERE id=10;
--- 获得 id=5 的 X Lock                 -- 获得 id=10 的 X Lock
-
-UPDATE t SET d=d+1 WHERE id=10;       UPDATE t SET d=d+1 WHERE id=5;
--- 等待 id=10 的 X Lock（被B持有）     -- 等待 id=5 的 X Lock（被A持有）
--- !!!! DEADLOCK !!!!                  -- !!!! DEADLOCK !!!!</code></pre>
+      <p style="font-size:0.85rem;color:var(--text-muted);">场景：两个事务交叉更新两行记录</p>
+      <div class="trx-timeline">
+        <div class="trx-legend">
+          <span><i class="dot-a"></i>事务 A</span>
+          <span><i class="dot-b"></i>事务 B</span>
+        </div>
+        <div class="trx-step session-a">
+          <span class="trx-label">事务 A</span>
+          <code>BEGIN;
+UPDATE t SET d=d+1 WHERE id=5;</code>
+          <span class="trx-lock lock-acquired">获得 id=5 的 X Lock</span>
+        </div>
+        <div class="trx-step session-b">
+          <span class="trx-label">事务 B</span>
+          <code>BEGIN;
+UPDATE t SET d=d+1 WHERE id=10;</code>
+          <span class="trx-lock lock-acquired">获得 id=10 的 X Lock</span>
+        </div>
+        <div class="trx-step session-a">
+          <span class="trx-label">事务 A</span>
+          <code>UPDATE t SET d=d+1 WHERE id=10;</code>
+          <span class="trx-lock lock-waiting">等待 id=10 的 X Lock（被B持有）</span>
+        </div>
+        <div class="trx-step session-b">
+          <span class="trx-label">事务 B</span>
+          <code>UPDATE t SET d=d+1 WHERE id=5;</code>
+          <span class="trx-lock lock-waiting">等待 id=5 的 X Lock（被A持有）</span>
+        </div>
+        <div class="trx-step step-result">
+          <span class="trx-label" style="background:rgba(239,68,68,0.1);color:#ef4444;">DEADLOCK</span>
+          <div class="trx-note"><strong>A等B，B等A → 循环等待 → 死锁！</strong></div>
+        </div>
+      </div>
 
       <h4>三、InnoDB死锁检测机制：Wait-for Graph</h4>
       <p>InnoDB维护一个<strong>等待图（Wait-for Graph）</strong>，这是一个有向图：</p>
@@ -3210,7 +3314,8 @@ UPDATE t SET d=d+1 WHERE id=10;       UPDATE t SET d=d+1 WHERE id=5;
       <p>具体实现上，每当一个事务因为锁冲突需要进入等待状态时，InnoDB会触发一次死锁检测：从当前等待的事务出发，沿着wait-for关系做深度优先搜索（DFS），如果搜索过程中回到了出发点，即发现了环路，就判定死锁。检测算法需要持有lock_sys全局mutex，在MySQL 8.0.18之前这是一个严重的并发瓶颈——当数百个事务同时竞争同一把锁时，每个新加入等待的事务都要遍历等待图，最坏时间复杂度为O(n^2)。</p>
 
       <!-- 死锁等待图 SVG -->
-      <svg width="500" height="300" viewBox="0 0 500 300" xmlns="http://www.w3.org/2000/svg" style="display:block;margin:16px auto;">
+      <div class="svg-container">
+      <svg width="500" height="300" viewBox="0 0 500 300" xmlns="http://www.w3.org/2000/svg">
         <defs>
           <marker id="arrow-red" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
             <polygon points="0 0, 10 3.5, 0 7" fill="#F44336"/>
@@ -3238,6 +3343,7 @@ UPDATE t SET d=d+1 WHERE id=10;       UPDATE t SET d=d+1 WHERE id=5;
         <rect x="180" y="255" width="140" height="30" fill="#FFEBEE" stroke="#F44336" stroke-width="2" rx="6"/>
         <text x="250" y="275" text-anchor="middle" font-size="13" font-weight="bold" fill="#F44336">DEADLOCK!</text>
       </svg>
+      </div>
 
       <h4>四、InnoDB死锁处理策略</h4>
       <p>检测到死锁后，InnoDB选择<strong>回滚代价最小的事务</strong>（undo log量最少的事务），作为"victim"进行回滚：</p>
@@ -3291,6 +3397,7 @@ SET GLOBAL innodb_lock_wait_timeout = 1;  -- 设短超时
 -- 注意：唯一索引上 ORD_001 和 ORD_005 之间有一个"间隙"</code></pre>
 
       <p><strong>死锁发生的完整时间线：</strong></p>
+      <div class="table-wrapper timeline-table">
       <table style="width:100%;border-collapse:collapse;margin:12px 0;">
         <thead>
           <tr style="background:var(--table-header-bg);">
@@ -3339,6 +3446,7 @@ SET GLOBAL innodb_lock_wait_timeout = 1;  -- 设短超时
           </tr>
         </tbody>
       </table>
+      </div>
 
       <h4>三、关键知识点：为什么会死锁？</h4>
       <ul>
@@ -3474,6 +3582,7 @@ WHERE id = 1001 AND stock >= 1;
 -- 这其实是"无锁"的思路，一条UPDATE就完成了原子操作</code></pre>
 
       <h4>三、对比与选型</h4>
+      <div class="table-wrapper">
       <table style="width:100%;border-collapse:collapse;margin:16px 0;">
         <thead>
           <tr style="background:#E3F2FD;">
@@ -3515,6 +3624,7 @@ WHERE id = 1001 AND stock >= 1;
           </tr>
         </tbody>
       </table>
+      </div>
 
       <h4>四、ABA 问题详解</h4>
       <p><strong>什么是 ABA 问题？</strong>乐观锁的 CAS（Compare And Swap）操作只检查"值是否和之前读到的一样"。如果值从 A 变成了 B，又变回了 A，CAS 检测不出来中间发生过变化——这就是 ABA 问题。</p>

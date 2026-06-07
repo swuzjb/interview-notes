@@ -1088,6 +1088,223 @@ tbody tr:hover td { background: var(--table-row-hover); }
   line-height: 1.5;
 }
 
+/* === TRANSACTION TIMELINE COMPONENT === */
+.trx-timeline {
+  margin: 1.4rem 0;
+  padding: 0;
+  position: relative;
+}
+
+.trx-timeline::before {
+  content: '';
+  position: absolute;
+  left: 18px;
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  background: var(--border);
+  border-radius: 1px;
+}
+
+.trx-step {
+  position: relative;
+  padding: 0.6rem 0.8rem 0.6rem 44px;
+  margin-bottom: 2px;
+  border-radius: 6px;
+  transition: background 0.2s;
+}
+
+.trx-step:hover {
+  background: rgba(128, 128, 128, 0.04);
+}
+
+/* Timeline dot */
+.trx-step::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 1.1rem;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--bg-primary);
+  z-index: 1;
+}
+
+/* Session badges */
+.trx-step.session-a::before {
+  border-color: #3b82f6;
+  background: #3b82f6;
+}
+
+.trx-step.session-b::before {
+  border-color: #f59e0b;
+  background: #f59e0b;
+}
+
+.trx-step.session-a {
+  border-left: 3px solid rgba(59, 130, 246, 0.3);
+}
+
+.trx-step.session-b {
+  border-left: 3px solid rgba(245, 158, 11, 0.3);
+}
+
+/* Step label */
+.trx-label {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 10px;
+  letter-spacing: 0.3px;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.session-a .trx-label {
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+}
+
+.session-b .trx-label {
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+}
+
+/* Step content */
+.trx-step code {
+  display: block;
+  background: var(--bg-code);
+  color: var(--code-text);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin: 4px 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  white-space: pre;
+  line-height: 1.6;
+}
+
+.trx-step .trx-note {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-top: 4px;
+}
+
+.trx-step .trx-note strong {
+  color: var(--text-primary);
+}
+
+/* Lock/state indicator */
+.trx-lock {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-top: 4px;
+}
+
+.trx-lock.lock-acquired {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+.trx-lock.lock-waiting {
+  background: rgba(245, 158, 11, 0.1);
+  color: #d97706;
+}
+
+.trx-lock.lock-released {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+/* Deadlock/result marker */
+.trx-step.step-result {
+  background: rgba(239, 68, 68, 0.04);
+  border-left: 3px solid #ef4444;
+}
+
+.trx-step.step-result::before {
+  border-color: #ef4444;
+  background: #ef4444;
+}
+
+.trx-step.step-success {
+  background: rgba(34, 197, 94, 0.04);
+  border-left: 3px solid #16a34a;
+}
+
+.trx-step.step-success::before {
+  border-color: #16a34a;
+  background: #16a34a;
+}
+
+/* Time marker */
+.trx-time {
+  position: absolute;
+  left: -2px;
+  top: 0.85rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  width: 16px;
+  text-align: center;
+}
+
+/* Timeline header with legend */
+.trx-legend {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 0.8rem;
+  padding: 0.5rem 0.8rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.trx-legend span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.trx-legend .dot-a {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b82f6;
+}
+
+.trx-legend .dot-b {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f59e0b;
+}
+
+/* Dark mode adjustments */
+[data-theme="dark"] .trx-step.session-a {
+  border-left-color: rgba(59, 130, 246, 0.4);
+}
+
+[data-theme="dark"] .trx-step.session-b {
+  border-left-color: rgba(245, 158, 11, 0.4);
+}
+
+[data-theme="dark"] .session-a .trx-label {
+  background: rgba(59, 130, 246, 0.15);
+}
+
+[data-theme="dark"] .session-b .trx-label {
+  background: rgba(245, 158, 11, 0.15);
+}
+
 /* === SVG CONTAINER === */
 .svg-container {
   text-align: center;
@@ -1364,6 +1581,16 @@ hr {
   transition: opacity 0.3s;
 }
 
+/* Code blocks use code background color */
+pre.scroll-hint::after {
+  background: linear-gradient(to right, transparent, var(--bg-code));
+}
+
+/* Inline-styled dark code blocks */
+pre[style*="background"].scroll-hint::after {
+  background: linear-gradient(to right, transparent, #1a1a2e);
+}
+
 .scroll-hint.can-scroll::after {
   opacity: 1;
 }
@@ -1461,6 +1688,11 @@ hr {
     max-width: 100%;
   }
 
+  .main-content > section,
+  .main-content > .page-hero {
+    max-width: 100%;
+  }
+
   /* Typography */
   body {
     line-height: 2;
@@ -1517,16 +1749,54 @@ hr {
     margin: 1.3rem 0 0.5rem;
   }
 
+  /* Transaction timeline - mobile */
+  .trx-timeline {
+    margin: 1rem -0.3rem;
+  }
+
+  .trx-timeline::before {
+    left: 14px;
+  }
+
+  .trx-step {
+    padding: 0.5rem 0.6rem 0.5rem 36px;
+  }
+
+  .trx-step::before {
+    left: 9px;
+    width: 10px;
+    height: 10px;
+  }
+
+  .trx-step code {
+    font-size: 0.72rem;
+    padding: 5px 8px;
+  }
+
+  .trx-step .trx-note {
+    font-size: 0.76rem;
+  }
+
+  .trx-label {
+    font-size: 0.63rem;
+  }
+
+  .trx-legend {
+    font-size: 0.7rem;
+    gap: 0.8rem;
+  }
+
   /* Code blocks */
   pre {
-    font-size: 0.78rem;
-    padding: 1.1rem 1.2rem;
-    line-height: 1.8;
+    font-size: 0.75rem !important;
+    padding: 1rem 1rem;
+    line-height: 1.7;
     margin: 0.8rem -0.5rem 1rem;
     border-left: none;
     border-right: none;
     border-radius: 0;
     box-shadow: none;
+    max-width: calc(100vw - 1rem);
   }
 
   .code-block {
@@ -1550,9 +1820,60 @@ hr {
     box-shadow: none;
   }
 
-  table { font-size: 0.79rem; }
-  thead th { padding: 0.6rem 0.75rem; font-size: 0.76rem; }
+  table { font-size: 0.76rem !important; }
+  thead th { padding: 0.6rem 0.75rem; font-size: 0.73rem !important; }
   tbody td { padding: 0.55rem 0.75rem; line-height: 1.7; }
+
+  /* Bare SVGs within qa-block / question-block - ensure responsive */
+  .qa-block svg,
+  .question-block svg {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* Timeline tables (transaction examples) - mobile optimization */
+  .timeline-table {
+    border: none;
+    box-shadow: none;
+  }
+
+  .timeline-table table {
+    min-width: 580px;
+  }
+
+  .timeline-table td,
+  .timeline-table th {
+    font-size: 0.76rem;
+    padding: 8px !important;
+    line-height: 1.6;
+  }
+
+  .timeline-table code {
+    font-size: 0.7rem;
+    word-break: break-all;
+  }
+
+  /* Inline-styled tables within qa-block/question-block - ensure horizontal scroll */
+  .qa-block .answer,
+  .qa-block > div:not(.svg-container) {
+    overflow-x: auto;
+  }
+
+  /* Tables within qa-block/question-block - shrink for mobile */
+  .qa-block > .answer > table,
+  .qa-block > table,
+  .question-block > table {
+    font-size: 0.76rem;
+    min-width: 100%;
+  }
+
+  .qa-block > .answer > table td,
+  .qa-block > .answer > table th,
+  .question-block > table td,
+  .question-block > table th {
+    padding: 6px 8px !important;
+    border-color: var(--border) !important;
+  }
 
   /* Q&A blocks */
   .qa, .qa-block {
@@ -1592,6 +1913,12 @@ hr {
 
   .callout p { font-size: 0.86rem; line-height: 1.9; }
 
+  /* Basics intro boxes with inline padding */
+  [id^="basics-"] {
+    padding: 16px !important;
+    border-radius: 8px !important;
+  }
+
   /* Diagrams */
   .diagram {
     padding: 1rem 0.5rem;
@@ -1609,6 +1936,12 @@ hr {
     border-left: none;
     border-right: none;
     box-shadow: none;
+  }
+
+  .svg-container svg {
+    width: 100%;
+    height: auto;
+    max-width: 100%;
   }
 
   /* Flow chart */
