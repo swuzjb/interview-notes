@@ -66,6 +66,9 @@
         <div class="nav-group">
           <a href="#ch14" class="nav-group-title">十四、性能对比与选型决策</a>
         </div>
+        <div class="nav-group">
+          <a href="#ch15" class="nav-group-title">十五、消息堆积追问链</a>
+        </div>
       </nav>
     </aside>
 
@@ -1815,6 +1818,84 @@ producer.newMessage()
                 代价：Ledger 切换时需要向元数据服务（ZK/Oxia）更新元数据，引入少量延迟尖刺（Spike）。</p>
             </div>
         </div>
+
+        <h3>Pulsar 深度追问链</h3>
+
+        <div class="qa-block">
+            <div class="qa-question">面试官追问：为什么你们选 Pulsar 不选 Kafka？存算分离的实际优势体现在哪？</div>
+            <div class="qa-answer">
+                <p>我们信贷系统选 Pulsar 有三个核心原因：<br><br>
+                <strong>①弹性伸缩能力：</strong>信贷业务流量波动大（月初月末是平时的3-5倍），Pulsar Broker 无状态，
+                K8s HPA 可以在 30 秒内完成扩容，不需要像 Kafka 那样 reassign partition（可能耗时数小时）。<br><br>
+                <strong>②消费模型灵活：</strong>Pulsar 的 Shared 模式让消费者数量不受分区限制。
+                我们的授信结果通知用 Key_Shared 模式（按 userId 路由保证同一用户有序），
+                堆积时直接加 Consumer 实例就能提速，不需要扩分区。<br><br>
+                <strong>③分层存储（Tiered Storage）：</strong>信贷系统要求消息保留 90 天用于审计。
+                Pulsar 的 Tiered Storage 可以把冷数据自动卸载到 S3/OSS，
+                热数据留在 BookKeeper 的 SSD 上，存储成本降低 70% 以上。<br><br>
+                <strong>Kafka 的痛点（对我们而言）：</strong><br>
+                - 扩 Partition 需要数据迁移，影响线上性能；<br>
+                - Consumer 数 &gt; Partition 数时多余的完全空闲；<br>
+                - 长期存储消息会导致磁盘压力大，没有原生分层存储（需要自建 Kafka Tiered Storage，不成熟）。</p>
+            </div>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">Pulsar 的四种订阅模式（Subscription Mode）分别在什么场景下使用？</div>
+            <div class="qa-answer">
+                <p><strong>①Exclusive（独占）：</strong>一个 Subscription 只有一个 Consumer。
+                等同于 Kafka 的标准模式。适用场景：严格顺序消费、单点处理。<br><br>
+                <strong>②Shared（共享）：</strong>多个 Consumer 轮询（Round-Robin）消费同一 Topic。
+                <strong>不保证消息顺序</strong>，但消费能力可以无限水平扩展——Consumer 数量不受 Partition 限制。
+                适用场景：无序的通知类消息、高吞吐消费。<br><br>
+                <strong>③Key_Shared：</strong>按 Message Key 的 Hash 值分配给特定 Consumer。
+                <strong>相同 Key 的消息始终路由到同一 Consumer</strong>，实现局部有序 + 并行消费。
+                适用场景：同一用户的事件要有序处理，但不同用户之间可以并行。
+                这是我们信贷系统用得最多的模式。<br><br>
+                <strong>④Failover（灾备）：</strong>主备模式。正常情况只有一个 Active Consumer 消费，
+                当 Active Consumer 宕机时，Standby Consumer 自动接管。
+                适用场景：有状态的消费逻辑（如维护本地缓存），不能多实例并行。</p>
+            </div>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">Pulsar 的 Quorum Write 和 Kafka 的 ISR 机制有什么区别？</div>
+            <div class="qa-answer">
+                <p><strong>Kafka ISR（In-Sync Replicas）：</strong><br>
+                - Producer 写入 Leader，Leader 等待 ISR 中所有 Follower 同步完成后返回 ACK（acks=all）<br>
+                - ISR 是动态集合：落后太多的 Follower 会被踢出 ISR<br>
+                - 风险：如果 ISR 缩小到只剩 Leader，此时 Leader 宕机则数据丢失<br><br>
+                <strong>Pulsar Quorum Write（BookKeeper）：</strong><br>
+                - 配置三个参数：E(Ensemble)=5, W(Write Quorum)=3, A(Ack Quorum)=2<br>
+                - 含义：每条消息写入 5 个 Bookie 中的 3 个，收到 2 个 ACK 即视为成功<br>
+                - 优势：写入不依赖单一 Leader，任意 Bookie 宕机不影响写入路径<br>
+                - 劣势：多一跳网络开销，延迟略高于 Kafka<br><br>
+                <strong>本质区别：</strong>Kafka 是 Leader-Follower 模型（写入串行化），
+                Pulsar/BookKeeper 是 Quorum 模型（并行写入多节点）。
+                Quorum 模型的容错粒度更细，但网络开销更大。</p>
+            </div>
+        </div>
+
+        <div class="callout">
+            <div class="callout-title">项目结合话术</div>
+            <p>
+                "我们信贷系统选 Pulsar 的核心原因是业务特点匹配：①流量波动大需要弹性伸缩，Broker 无状态可以秒级扩容；
+                ②同一用户的消息需要有序但用户间可以并行，Key_Shared 模式完美匹配；
+                ③审计要求消息保留 90 天，Tiered Storage 把冷数据卸载到 OSS，存储成本可控。
+                如果是纯粹追求吞吐的日志收集场景，我还是会选 Kafka。"
+            </p>
+        </div>
+
+        <div class="callout">
+            <div class="callout-title">踩坑警告</div>
+            <p>
+                ①<strong>Key_Shared 的坑：</strong>如果某个 Key 的消息量特别大（热点 Key），
+                会导致负责该 Key 的 Consumer 过载，其他 Consumer 空闲——需要配合限流或拆分 Key。<br>
+                ②<strong>Shared 模式不保证顺序：</strong>千万不要在需要顺序消费的场景用 Shared，会出大问题。<br>
+                ③<strong>BookKeeper 运维复杂度：</strong>需要单独监控 Bookie 的 Journal 盘和 Ledger 盘使用率，
+                盘满会导致整个 Topic 不可写入。
+            </p>
+        </div>
     </section>
 
     <!-- ============================================================ -->
@@ -2297,6 +2378,98 @@ while (true) {
                 仍可能丢失数据。真正的"零丢失"需要跨机房/跨AZ部署副本。<br><br>
                 <strong>阿里双11的实际配置：</strong>ASYNC_FLUSH + SYNC_MASTER（可靠性与性能的最佳平衡点）。</p>
             </div>
+        </div>
+
+        <h3>消息可靠性深度追问链</h3>
+
+        <div class="qa-block">
+            <div class="qa-question">面试追问：消息可靠性"三段保证"，每段的核心机制分别是什么？如何做到端到端不丢？</div>
+            <div class="qa-answer">
+                <p><strong>第一段 · 生产者端：</strong><br>
+                ①<strong>同步发送 + 确认</strong>：producer.send(msg).get() 阻塞等待 Broker ACK，不要用 fire-and-forget；<br>
+                ②<strong>重试机制</strong>：设置 retries=MAX_VALUE + retry.backoff.ms=100，瞬时网络抖动自动重试；<br>
+                ③<strong>幂等 Producer</strong>：Kafka 设 enable.idempotence=true（基于 PID+SeqNum 去重），
+                Pulsar 开启 MessageDeduplication，保证重试不导致消息重复写入；<br>
+                ④<strong>本地持久化兜底</strong>：send 失败后写入本地 DB/文件，后台定时重发，确保极端情况不丢。<br><br>
+
+                <strong>第二段 · Broker 端：</strong><br>
+                ①<strong>持久化刷盘</strong>：Kafka 依赖 OS PageCache + 副本保证（不建议同步刷盘），
+                RocketMQ 可选 SYNC_FLUSH，Pulsar 的 BookKeeper 默认 Journal fsync；<br>
+                ②<strong>副本同步</strong>：<br>
+                - Kafka ISR 机制：acks=all + min.insync.replicas=2，确保至少 2 个副本写入成功；<br>
+                - Pulsar Quorum Write：W=3, A=2，写入 3 个 Bookie 中收到 2 个 ACK 即成功；<br>
+                ③<strong>禁止脏选举</strong>：Kafka 设 unclean.leader.election.enable=false，避免数据不完整的副本当选 Leader。<br><br>
+
+                <strong>第三段 · 消费者端：</strong><br>
+                ①<strong>手动 ACK</strong>：关闭自动提交（enable.auto.commit=false），业务处理成功后再手动 commit offset；<br>
+                ②<strong>先处理后提交</strong>：消费顺序必须是"拉取→处理→ACK"，而非"拉取→ACK→处理"；<br>
+                ③<strong>消费重试 + 死信队列</strong>：消费失败的消息进入 Retry Topic，重试 N 次仍失败则进入 Dead Letter Queue，人工介入；<br>
+                ④<strong>消费幂等</strong>：由于"至少一次"语义可能导致重复消费，消费逻辑必须幂等（唯一索引/状态机/去重表）。</p>
+            </div>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">追问：你们信贷系统的消息可靠性是怎么保证的？遇到过消息丢失吗？</div>
+            <div class="qa-answer">
+                <p><strong>我们的三段保证实践：</strong><br><br>
+                <strong>生产端：</strong>使用 Pulsar 的同步发送 + sendTimeout=30s，失败后写入本地消息表（MySQL），
+                定时任务每 5 秒扫描重发。业务代码中所有 send 调用都包在 try-catch 中，
+                任何异常都会落地到本地表，绝不吞异常。<br><br>
+                <strong>Broker 端：</strong>Pulsar BookKeeper 配置 E=3, W=3, A=2，Journal 开启 fsync。
+                3 个 Bookie 跨机架部署，单机宕机不影响可靠性。<br><br>
+                <strong>消费端：</strong>手动 ACK（INDIVIDUAL_ACK 模式），业务处理完成并写入数据库后才 acknowledge。
+                消费失败进入 Pulsar 原生的 Retry Topic，最多重试 16 次（指数退避），
+                最终失败进入 DLQ（Dead Letter Topic），触发告警由值班人员处理。<br><br>
+                <strong>遇到过的事故：</strong>有一次消费者代码 bug 导致 NPE 频繁抛出，消息不断进入 Retry Topic 然后又失败，
+                形成"毒丸消息"（Poison Message）。解决方案是：对连续失败的消息快速进入 DLQ 而非无限重试，
+                并在消费者中加入了异常分类——业务异常重试、系统异常快速进 DLQ。</p>
+            </div>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">追问：Kafka 的幂等 Producer 底层原理是什么？为什么能保证 Exactly-Once 语义？</div>
+            <div class="qa-answer">
+                <p><strong>Kafka 幂等 Producer 的核心机制：</strong><br><br>
+                ①<strong>PID (Producer ID)</strong>：每个 Producer 实例启动时从 Broker 获取一个全局唯一的 PID；<br>
+                ②<strong>Sequence Number</strong>：每个 &lt;PID, TopicPartition&gt; 维护一个单调递增的序列号；<br>
+                ③<strong>Broker 端去重</strong>：Broker 为每个 &lt;PID, Partition&gt; 缓存最近 5 个 batch 的 SeqNum，
+                收到重复 SeqNum 的消息直接丢弃（返回成功但不写入日志）。<br><br>
+                <strong>限制：</strong><br>
+                - 幂等 Producer 只能保证<strong>单分区内</strong>的 Exactly-Once（跨分区需要事务）；<br>
+                - Producer 重启后 PID 会变，需要配合 transactional.id 实现跨会话幂等；<br>
+                - Sequence Number 有溢出风险（int 类型），但实际不太可能触达。<br><br>
+                <strong>Pulsar 的去重方式不同：</strong>Pulsar 的 MessageDeduplication 是在 Broker 端基于
+                producerName + sequenceId 做去重，逻辑类似但实现在 Managed Ledger 层面。</p>
+            </div>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">追问：消费端"先处理后提交"会导致什么问题？怎么解决？</div>
+            <div class="qa-answer">
+                <p><strong>问题：重复消费。</strong><br>
+                场景：Consumer 拉取消息→处理成功→还没来得及 commit offset→Consumer 宕机重启→
+                从上次 committed offset 重新拉取→同一条消息被<strong>再次处理</strong>。<br><br>
+                <strong>这就是"至少一次"（At-Least-Once）语义的本质代价：</strong>
+                为了不丢消息（先处理后提交），必须接受可能重复消费。<br><br>
+                <strong>解决方案：消费端幂等。</strong><br>
+                ①<strong>数据库唯一索引</strong>：INSERT ... ON DUPLICATE KEY UPDATE，重复插入自然被拦截；<br>
+                ②<strong>Redis 去重</strong>：SETNX messageId，存在则跳过；<br>
+                ③<strong>业务状态机</strong>：只有特定状态才允许流转，重复消费时状态已变，自动跳过。<br><br>
+                <strong>我们的做法：</strong>消费者处理前先用 messageId 做 Redis SETNX（TTL=7天），
+                如果已存在则说明是重复消费，直接 ACK 跳过。数据库层面再加唯一索引兜底。</p>
+            </div>
+        </div>
+
+        <div class="callout">
+            <div class="callout-title">踩坑警告</div>
+            <p>
+                ①<strong>自动提交是最大的坑：</strong>Kafka 默认 enable.auto.commit=true，
+                每 5 秒自动提交——如果消费失败但 offset 已提交，消息就"丢了"（其实是跳过了）；<br>
+                ②<strong>异步发送不等于不可靠：</strong>Kafka producer.send(msg, callback) 是异步的，
+                但通过 callback 可以捕获失败并重试。问题在于很多人写了 send() 却不处理 callback 的 Exception；<br>
+                ③<strong>ACK 粒度的选择：</strong>Pulsar 支持 Cumulative ACK（确认到某个位置之前全部）和 Individual ACK（逐条确认）。
+                Cumulative 性能好但如果中间某条消费失败，它之前的都被 ACK 了，该条丢失。我们用 Individual ACK 避免这个问题。
+            </p>
         </div>
     </section>
 
@@ -4122,6 +4295,194 @@ maxReconsumeTimes=16                 # 最大重试次数(超出进入DLQ)</code
                 ④<strong>一个Topic万能化：</strong>所有事件塞一个Topic，不同消费者各取所需——导致互相影响、无法独立扩缩<br>
                 ⑤<strong>不监控Lag：</strong>消费堆积发现不及时，用户反馈才知道系统已经瘫痪</p>
             </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- 第十五章：消息堆积追问链 -->
+    <!-- ============================================================ -->
+    <section class="chapter" id="ch15">
+        <div class="chapter-header">
+            <div class="chapter-number">Chapter 15</div>
+            <h2>深度追问：消息堆积处理</h2>
+        </div>
+
+        <p>
+            <strong>"消息堆积了怎么处理？"</strong>——这是面试中考查你实战经验的标志性问题。
+            回答不好会暴露"只背理论不做实操"的短板。核心规则：<strong>同一 Consumer Group 内，一个 Queue/Partition 只能被一个 Consumer 消费</strong>。
+            理解这一点才能正确回答扩容策略。
+        </p>
+
+        <h3>核心规则：1 Queue = 1 Consumer</h3>
+
+        <div class="callout">
+            <div class="callout-title">为什么 1 个 Queue 只能被 1 个 Consumer 消费？</div>
+            <p>
+                <strong>根本原因：保证分区内消息的顺序性。</strong><br><br>
+                如果一个 Queue 允许多个 Consumer 消费：msg1 是"创建订单"，msg2 是"支付完成"。
+                Consumer2 可能先处理 msg2，此时订单还没创建——业务错误！<br><br>
+                所以：一个 Queue 由一个 Consumer 顺序消费 → 分区内有序 → 同一业务 Key 路由到同一分区 → 业务有序。<br><br>
+                <strong>推论：</strong>如果 Consumer 数 &gt; Partition 数，多出来的 Consumer 完全空闲（白白占资源）。
+                在 Kafka/RocketMQ 模型下，消费并行度上限 = Partition 数。如果单个 Consumer 已优化到极致仍不够，则需要<strong>同时增加 Partition 和 Consumer</strong>。但首先应优化单条消费速度（批量处理、异步化、减少 IO 阻塞）和 Consumer 内部多线程并行。
+            </p>
+        </div>
+
+        <h3>消息堆积处理决策树</h3>
+
+        <pre data-lang="text"><code>                 消息堆积了？
+                      │
+         ┌────────────┼────────────┐
+         ↓            ↓            ↓
+    可以丢弃？    需要保留？    系统性问题？
+         │            │            │
+    跳过offset   紧急扩容      找根因
+         │            │            │
+         ↓            ↓            ↓
+    快进到最新    方案选择        修复
+                      │
+         ┌────────────┼────────────┐
+         ↓            ↓            ↓
+    直接扩容      临时Topic转发    优化消费速度
+    (队列+消费者)  (更多分区)      (批量/异步)</code></pre>
+
+        <h3>三种止血方案</h3>
+
+        <h4>方案一：直接扩容（最快止血）</h4>
+
+        <pre data-lang="bash"><code># Kafka：增加分区（注意：不可逆！只能增不能减）
+bin/kafka-topics.sh --alter --topic credit-events --partitions 32
+
+# 同时扩消费者实例数到 32（否则多余分区无人消费）
+
+# Pulsar Shared 模式：直接加 Consumer 实例即可，不需要扩分区！
+# 这是 Pulsar 对比 Kafka 的核心优势之一</code></pre>
+
+        <h4>方案二：临时 Topic 转发（数据量极大时）</h4>
+
+        <pre data-lang="java"><code>// 紧急消费者：不做业务逻辑，只转发到临时 Topic（更多分区）
+@PulsarListener(topics = "credit-events")
+public void emergencyForward(Message&lt;String&gt; msg) {
+    // 转发到临时 Topic（64 个分区），让更多消费者并行处理
+    pulsarTemplate.send("credit-events-temp-64", msg.getKey(), msg.getValue());
+    // 原 Topic 的消息被快速消费掉，堆积清零
+}
+
+// 真正的业务消费者订阅临时 Topic
+@PulsarListener(topics = "credit-events-temp-64", subscriptionType = SubscriptionType.Key_Shared)
+public void realProcess(Message&lt;String&gt; msg) {
+    creditService.process(msg.getValue());
+}</code></pre>
+
+        <h4>方案三：优化消费速度（长期方案）</h4>
+
+        <pre data-lang="java"><code>// 批量消费：一次拉取 100 条，批量写 DB（减少 IO 次数）
+@PulsarListener(topics = "credit-events", batch = true, maxBatchSize = 100)
+public void batchConsume(List&lt;Message&lt;String&gt;&gt; messages) {
+    List&lt;CreditEvent&gt; events = messages.stream()
+        .map(m -&gt; JSON.parseObject(m.getValue(), CreditEvent.class))
+        .collect(Collectors.toList());
+    // 批量入库（一次 INSERT 100 条 vs 100 次 INSERT 1 条）
+    creditEventMapper.batchInsert(events);
+}
+
+// 异步处理：消费后扔到本地线程池
+@PulsarListener(topics = "notification-events")
+public void asyncConsume(Message&lt;String&gt; msg) {
+    // ACK 后异步处理（适用于非关键通知类消息）
+    asyncExecutor.submit(() -&gt; notificationService.send(msg.getValue()));
+}</code></pre>
+
+        <h3>追问链</h3>
+
+        <div class="qa-block">
+            <div class="qa-question">追问1：消费者数量已经等于分区数了，还能怎么提升消费能力？</div>
+            <div class="qa-answer">
+                <p><strong>三种方案：</strong><br><br>
+                ①<strong>消费者内部多线程：</strong>单个消费者拉取消息后，分发到本地线程池并行处理。
+                注意：需要自己保证同一 Key 的消息在同一线程中顺序处理（用 Key hash 绑定线程）。<br><br>
+                ②<strong>批量化处理：</strong>把 100 次 DB 写入合并为 1 次 batchInsert，把 100 次 RPC 合并为 1 次批量调用。
+                这往往能把消费速度提升 10-50 倍。<br><br>
+                ③<strong>减少单条消息处理耗时：</strong>本地缓存热数据（减少 Redis/DB 查询）、异步化非关键逻辑、
+                减少不必要的序列化/反序列化。<br><br>
+                <strong>Pulsar 的额外优势：</strong>如果使用 Shared/Key_Shared 模式，直接加 Consumer 实例就行，
+                消费者数量不受分区限制。这也是我们选 Pulsar 的原因之一。</p>
+            </div>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">追问2：消息堆积的监控告警怎么设计？你们的告警阈值是多少？</div>
+            <div class="qa-answer">
+                <p><strong>核心监控指标：</strong><br>
+                ① Consumer Lag = Latest Offset - Consumer Committed Offset（每个分区独立统计）<br>
+                ② 堆积消息总数 = Σ(每个分区的 Lag)<br>
+                ③ 消费速率 = 单位时间消费的消息数（TPS）<br>
+                ④ 预计消化时间 = 堆积量 / 消费速率<br><br>
+                <strong>我们的告警规则（三级）：</strong><br>
+                - <strong>WARNING：</strong>Consumer Lag &gt; 10000 持续 5 分钟 → 企业微信通知<br>
+                - <strong>CRITICAL：</strong>Lag &gt; 100000 或 预计消化时间 &gt; 30 分钟 → 电话告警 + 自动扩容<br>
+                - <strong>FATAL：</strong>Lag 持续增长且消费速率 = 0（消费者全挂了）→ P0 故障上报<br><br>
+                <strong>Pulsar 的监控方式：</strong>通过 pulsar-admin 或 Prometheus + Grafana 监控
+                <code>pulsar_subscription_back_log</code> 指标，配合 AlertManager 发告警。</p>
+            </div>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">追问3：在你的信贷系统中，消息堆积最严重的一次是怎么处理的？</div>
+            <div class="qa-answer">
+                <p><strong>618 大促故障复盘：</strong><br><br>
+                <strong>背景：</strong>618 当天授信申请量是平时的 5 倍，Consumer Lag 飙到 50 万条。<br><br>
+                <strong>原因分析：</strong>消费者每处理一条授信消息需要调用风控引擎（50ms/次）+ 写入 DB（20ms/次），
+                单条处理耗时约 80ms，4 个消费者实例的极限吞吐 = 4 × (1000/80) ≈ 50 TPS，
+                而生产端峰值 300 TPS。<br><br>
+                <strong>应急操作（15 分钟完成）：</strong><br>
+                ① 将消费者实例从 4 扩到 16（Pulsar Key_Shared 模式不受分区限制，直接加 Pod）；<br>
+                ② 临时关闭非核心消费逻辑（如积分计算、营销触达），只保留核心授信流程；<br>
+                ③ 对风控引擎调用改为批量接口（一次传 10 条，耗时从 50ms×10 降到 120ms）。<br><br>
+                <strong>效果：</strong>消费速度从 50 TPS 提升到 3000 TPS，30 分钟内消化完 50 万积压。<br><br>
+                <strong>长期优化（事后）：</strong><br>
+                - 风控结果本地缓存（相同用户 5 分钟内重复申请直接走缓存）<br>
+                - 消费端改为批量模式（每次拉取 50 条批量处理）<br>
+                - 增加弹性伸缩策略（Lag &gt; 5000 时自动扩容 Consumer Pod）</p>
+            </div>
+        </div>
+
+        <div class="qa-block">
+            <div class="qa-question">追问4：消息堆积的常见根因有哪些？如何预防？</div>
+            <div class="qa-answer">
+                <p><strong>四大根因：</strong><br>
+                ①<strong>消费者处理太慢</strong>：单条消息处理逻辑太重（涉及多次 RPC/DB 查询），是最常见原因；<br>
+                ②<strong>流量突增</strong>：大促、营销活动导致申请量暴增，生产速度远超消费能力；<br>
+                ③<strong>消费者故障</strong>：消费者 OOM/频繁 GC/线程死锁，导致消费停滞；<br>
+                ④<strong>下游依赖故障</strong>：消费逻辑依赖的 DB/Redis/第三方服务不可用，导致消费失败不断重试。<br><br>
+                <strong>预防措施：</strong><br>
+                ①<strong>容量预估</strong>：提前做压测，确保消费能力 ≥ 2 倍峰值生产速度；<br>
+                ②<strong>弹性伸缩</strong>：配置 HPA 策略，Lag 超阈值自动扩容；<br>
+                ③<strong>熔断降级</strong>：下游依赖不可用时快速失败进入 Retry Topic，不要死等；<br>
+                ④<strong>消费降级开关</strong>：提前准备好"只处理核心逻辑"的降级模式，一键切换。</p>
+            </div>
+        </div>
+
+        <div class="callout">
+            <div class="callout-title">踩坑警告</div>
+            <p>
+                ①<strong>❌ "多加几个消费者就能提升消费能力"</strong> → ✅ 消费者数 &gt; 分区数时多余的是空闲的（Kafka/RocketMQ）<br>
+                ②<strong>❌ "Kafka 可以动态减少分区"</strong> → ✅ Kafka 分区只能增不能减！规划时要预留<br>
+                ③<strong>❌ "堆积了就丢消息"</strong> → ✅ 要区分消息类型，资金类绝对不能丢<br>
+                ④<strong>❌ "Pulsar 和 Kafka 消费模型一样"</strong> → ✅ Pulsar Shared 模式打破了 1:1 限制
+            </p>
+        </div>
+
+        <div class="callout">
+            <div class="callout-title">项目结合话术</div>
+            <p>
+                "我们信贷系统用的是 Pulsar，处理三类消息：授信事件、放款事件、还款事件。
+                针对消息堆积，我们的策略是分级对待：<br><br>
+                ① <strong>授信结果通知</strong>用 Key_Shared 模式，按 userId 分发保证同一用户有序。
+                正常延迟 200ms 以内，堆积超 1 万条告警，可以快速加 Consumer 实例（不需要扩分区）。<br><br>
+                ② <strong>对账消息</strong>是批量消费模式，每次拉 500 条批量处理，允许分钟级延迟。<br><br>
+                ③ 有一次 618 大促积压了 50 万条，我们 15 分钟内通过扩容 Consumer + 批量化 + 降级非核心逻辑，
+                把消费速度从 50 TPS 提到 3000 TPS，30 分钟消化完毕。"
+            </p>
         </div>
     </section>
 

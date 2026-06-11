@@ -1237,6 +1237,94 @@ EXPLAIN ANALYZE SELECT ...;  -- 显示实际执行时间</code></pre>
     <div class="key-point">
       <strong>关于优化器的"任性"：</strong>有时候你建了索引，EXPLAIN却显示全表扫描。这不一定是bug——如果查询要返回表中大部分数据（比如超过30%），优化器会判断：与其走索引再逐条回表，不如直接顺序扫描全表更快。这是正确的决策。可以用 <code>FORCE INDEX</code> 强制使用索引来验证你的判断。
     </div>
+
+    <!-- 索引失效 面试追问链 -->
+    <h4>面试追问链</h4>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>隐式类型转换为什么会导致索引失效？底层原理是什么？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>本质是MySQL在类型不匹配时会<strong>对索引列施加隐式CAST函数</strong>，破坏了索引的有序性。</p>
+      <p><strong>规则：</strong>MySQL在字符串和数字比较时，会将<strong>字符串转为数字</strong>（不是数字转字符串）。</p>
+      <pre data-lang="sql"><code>-- phone是VARCHAR类型，索引idx_phone(phone)
+SELECT * FROM users WHERE phone = 13800138000;
+-- MySQL实际执行的是: WHERE CAST(phone AS UNSIGNED) = 13800138000
+-- 对索引列施加了CAST函数 → 索引失效，全表扫描！
+
+-- 反过来：id是INT类型
+SELECT * FROM users WHERE id = '100';
+-- MySQL将'100'转为数字100，id列本身不需要转换 → 索引有效！</code></pre>
+      <p><strong>金融系统特别注意</strong>：身份证号、手机号、银行卡号等字段一定要定义为VARCHAR，查询时一定要加引号。我们做过code review规范检查这个。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>最左前缀原则失效的细节？跳过中间列、范围查询后的列分别怎么处理？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>联合索引 <code>idx(a, b, c)</code> 在B+树中按(a, b, c)的顺序排列。</p>
+      <p><strong>核心规则：</strong>索引使用到某一列出现范围查询（&gt;, &lt;, BETWEEN, LIKE 'x%'）后，该列右边的列<strong>无法使用索引排序</strong>（但仍可能用于过滤——这就是索引下推ICP）。</p>
+      <table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:14px;">
+        <tr style="background:#1565C0;color:white;"><th style="padding:8px;border:1px solid #ddd;">查询条件</th><th style="padding:8px;border:1px solid #ddd;">索引使用情况</th><th style="padding:8px;border:1px solid #ddd;">原因</th></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><code>WHERE a=1 AND b=2 AND c=3</code></td><td style="padding:8px;border:1px solid #ddd;color:green;">使用a,b,c（全部）</td><td style="padding:8px;border:1px solid #ddd;">全等值，完美匹配</td></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><code>WHERE a=1 AND b&gt;2 AND c=3</code></td><td style="padding:8px;border:1px solid #ddd;color:orange;">使用a,b（c无法用于排序）</td><td style="padding:8px;border:1px solid #ddd;">b范围查询后，c在B+树中不再有序</td></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><code>WHERE b=2 AND c=3</code></td><td style="padding:8px;border:1px solid #ddd;color:red;">索引失效（跳过a）</td><td style="padding:8px;border:1px solid #ddd;">最左列缺失，无法利用索引有序性</td></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><code>WHERE a=1 AND c=3</code></td><td style="padding:8px;border:1px solid #ddd;color:orange;">使用a（c可能ICP过滤）</td><td style="padding:8px;border:1px solid #ddd;">跳过b，c在B+树中不有序</td></tr>
+      </table>
+      <p><strong>MySQL 8.0的改进（Index Skip Scan）</strong>：对于 <code>WHERE b=2</code> 这类跳过最左列的查询，如果a的基数很低（如性别只有M/F），MySQL 8.0优化器可能使用Skip Scan：相当于拆成 <code>WHERE a='M' AND b=2 UNION WHERE a='F' AND b=2</code>。但基数高时仍然失效。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>OR条件什么时候导致索引失效？UNION ALL拆分和index_merge哪个更好？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p><strong>OR失效规则：</strong>OR连接的条件中，如果有<strong>任何一个条件没有索引</strong>，则整个WHERE无法使用索引（因为需要返回满足任一条件的行，没有索引的条件只能全表扫描）。</p>
+      <pre data-lang="sql"><code>-- 索引: idx_name(name), 无age索引
+SELECT * FROM users WHERE name='Jack' OR age &gt; 25;  -- 索引失效
+
+-- 两个列都有独立索引时，优化器可能用index_merge
+SELECT * FROM users WHERE name='Jack' OR email='x@y.com';
+-- EXPLAIN: type=index_merge, Using union(idx_name, idx_email)</code></pre>
+      <p><strong>index_merge vs UNION ALL：</strong></p>
+      <ul>
+        <li><strong>index_merge</strong>：优化器自动选择，性能不稳定（需要对两个索引的结果做union/intersect），在复杂场景下可能比全表扫描更慢</li>
+        <li><strong>UNION ALL拆分</strong>：手动将OR改为两条SQL的UNION ALL，每条SQL走各自最优索引，性能更可控</li>
+        <li><strong>最优方案</strong>：创建覆盖OR条件的联合索引消除OR，或重新设计查询逻辑</li>
+      </ul></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>LIKE '%keyword%'一定走全表扫描吗？有没有优化方案？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p><strong>前缀通配（%开头）一定无法利用B+树索引的有序性</strong>，因为B+树是按字典序排列的，前缀不确定就无法定位起始位置。</p>
+      <p><strong>优化方案：</strong></p>
+      <ol>
+        <li><strong>覆盖索引优化</strong>：如果查询列都在索引中，MySQL可能选择全索引扫描（type=index）而非全表扫描，减少IO</li>
+        <li><strong>全文索引（FULLTEXT）</strong>：适合文本搜索场景，InnoDB 5.6+支持</li>
+        <li><strong>ES/Solr辅助</strong>：把需要模糊搜索的字段同步到搜索引擎，MySQL只存结构化数据</li>
+        <li><strong>冗余反转列</strong>：对于后缀搜索（如查手机尾号），可以新增一列存反转字符串，将 <code>LIKE '%8000'</code> 变为 <code>LIKE '0008%'</code></li>
+      </ol>
+      <p><strong>我们的做法</strong>：运营后台的模糊搜索（按姓名/手机号模糊查）走ES，MySQL只响应精确匹配查询。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>NOT IN和!=一定导致索引失效吗？什么条件下优化器仍然走索引？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p><strong>不一定失效</strong>，取决于数据分布和优化器的代价评估。</p>
+      <p><strong>关键因素：选择性（Selectivity）</strong></p>
+      <ul>
+        <li>如果 <code>status != 1</code> 能过滤掉90%的数据（只有10%满足），优化器认为走索引+回表只处理10%行，代价可接受 → <strong>可能走索引</strong></li>
+        <li>如果 <code>status != 1</code> 只过滤掉5%的数据（95%满足），走索引后还要回表取95%的行，代价比全表扫描高 → <strong>全表扫描</strong></li>
+      </ul>
+      <p><strong>NOT IN的特殊情况</strong>：</p>
+      <pre data-lang="sql"><code>-- NOT IN子查询如果子查询结果有NULL，整个条件恒为FALSE
+SELECT * FROM t WHERE id NOT IN (SELECT col FROM t2);
+-- 如果t2.col有NULL值，结果永远为空集！这是SQL三值逻辑的坑
+
+-- 建议改写为 NOT EXISTS
+SELECT * FROM t WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE t2.col = t.id);</code></pre>
+      <p><strong>面试总结</strong>：不要一刀切说"!=就索引失效"。正确说法是"取决于数据分布和优化器代价评估，高选择性的不等条件仍可能走索引"。</p></div>
+    </div>
+
+    <div class="callout warn">
+      <strong>踩坑警告：</strong>信贷系统中遇到的真实索引失效案例——phone字段是VARCHAR但接口传参没加引号（隐式类型转换），以及对create_time做DATE_FORMAT后索引失效。现在code review有自动检测规则。
+    </div>
+
+    <div class="callout tip">
+      <strong>项目结合话术：</strong>"我在信贷系统做慢SQL优化时遇到过几个典型索引失效：一是手机号字段VARCHAR类型但查询传入数字导致隐式转换；二是对create_time做了YEAR()函数处理；三是联合索引(user_id, status, create_time)但查询跳过了status直接按user_id+create_time查。这些都是通过EXPLAIN发现type=ALL后逐一排查修复的。修复后慢查询减少了80%。我们还建立了SQL审核规则，在CI阶段拦截可能索引失效的SQL模式。"
+    </div>
   </div>
 
   <!-- Q7: 自增主键 vs UUID -->
@@ -1709,6 +1797,85 @@ SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;</code></pre>
         <text x="350" y="370" text-anchor="middle" font-size="11" font-weight="bold" fill="#e94560">MySQL InnoDB 默认：REPEATABLE READ</text>
       </svg>
     </div>
+
+    <!-- 隔离级别 面试追问链 -->
+    <h4>面试追问链</h4>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>为什么MySQL默认RR而Oracle默认RC？现在互联网公司还用RR吗？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>历史和技术原因结合：</p>
+      <ol>
+        <li><strong>MySQL早期binlog格式是STATEMENT</strong>：在RC级别下主从复制可能出现数据不一致。例如事务A删一行、事务B插一行并先提交，STATEMENT格式binlog记录顺序可能导致从库重放结果不同。RR级别下间隙锁可以避免这个问题</li>
+        <li><strong>Oracle从一开始就有成熟的REDO/UNDO</strong>：RC下性能已足够，且企业级OLTP更注重并发性能</li>
+        <li><strong>MySQL 5.1+引入ROW格式binlog</strong>后，RC的主从一致性问题已解决</li>
+      </ol>
+      <p><strong>现状：</strong>阿里、字节内部很多业务已改为RC级别，配合ROW格式binlog。原因是RC没有间隙锁，锁粒度更小，并发度更高，死锁概率更低。</p>
+      <p><strong>我们的选择：</strong>保持RR。信贷业务对数据一致性要求极高，且并发量以读为主，RR的间隙锁开销影响不大。切RC需要全量回归，ROI不高。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>RR和RC的性能差异体现在哪里？实际能差多少？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p><strong>核心差异在锁粒度：</strong></p>
+      <ul>
+        <li><strong>RR有间隙锁（Gap Lock）</strong>：锁住范围，阻止其他事务在范围内INSERT。高并发写入场景下间隙锁会导致大量锁等待甚至死锁</li>
+        <li><strong>RC只有记录锁（Record Lock）</strong>：锁粒度最小，并发度最高</li>
+      </ul>
+      <p><strong>实际影响场景：</strong></p>
+      <ol>
+        <li><strong>批量INSERT场景</strong>：RR下范围查询加的间隙锁会阻塞INSERT，RC下没有这个问题</li>
+        <li><strong>"先查后插"场景</strong>：RR下两个事务都拿到Gap Lock再INSERT会死锁，RC下没有Gap Lock不会死锁</li>
+        <li><strong>读场景差异不大</strong>：都走MVCC，区别只是ReadView创建时机</li>
+      </ol>
+      <p><strong>性能差距</strong>：在高并发写入的流水表上，RC比RR的TPS可以高20-30%（主要是减少了锁等待和死锁回滚）。纯读场景几乎无差别。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>InnoDB在RR级别下是如何实现"可重复读"的？为什么同一事务内两次读结果一样？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>核心机制是<strong>ReadView复用</strong>。</p>
+      <p>RR级别下，事务在<strong>第一次执行快照读（普通SELECT）时</strong>创建ReadView，之后整个事务内所有快照读都复用这同一个ReadView。因此：</p>
+      <ul>
+        <li>其他事务在两次读之间提交的修改，对当前事务的ReadView来说仍在m_ids中（活跃列表在创建时就固定了）→ 不可见</li>
+        <li>所以同一事务内两次读同一行，结果一定相同——因为用的是同一个"快照视图"</li>
+      </ul>
+      <p><strong>对比RC</strong>：RC每次SELECT都新建ReadView，新ReadView反映了当前时刻的事务状态，已提交的事务不再出现在m_ids中 → 其修改可见 → "不可重复读"。</p>
+      <p><strong>注意</strong>：ReadView是在第一次SELECT时创建，不是BEGIN时。如果BEGIN后先做了DML再SELECT，ReadView在SELECT时才创建。这个时间差可能导致看到BEGIN之后才提交的数据。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>什么是写偏斜（Write Skew）？RR级别能防止吗？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p><strong>写偏斜是RR（快照隔离）的固有缺陷</strong>，SQL标准没有明确提及但真实存在。</p>
+      <p><strong>经典场景——医院值班：</strong>规则要求至少一个医生值班。</p>
+      <pre data-lang="sql"><code>-- 事务A：医生Alice想请假
+BEGIN;
+SELECT COUNT(*) FROM on_duty WHERE status='on';  -- 结果=2 (Alice和Bob都在)
+-- Alice认为还有Bob在，可以请假
+UPDATE on_duty SET status='off' WHERE name='Alice';
+COMMIT;
+
+-- 事务B：医生Bob同时想请假（并发执行）
+BEGIN;
+SELECT COUNT(*) FROM on_duty WHERE status='on';  -- 快照读也看到=2
+-- Bob认为还有Alice在，可以请假
+UPDATE on_duty SET status='off' WHERE name='Bob';
+COMMIT;
+
+-- 结果：两人都请假了，违反了"至少一人值班"的约束！</code></pre>
+      <p><strong>原因</strong>：两个事务各自基于快照读做决策，快照读不加锁，互相看不到对方的修改。</p>
+      <p><strong>防止方案</strong>：把快照读改为当前读 <code>SELECT ... FOR UPDATE</code>，加锁后第二个事务会被阻塞等第一个提交，就能看到正确状态。</p></div>
+    </div>
+
+    <div class="callout warn">
+      <strong>踩坑警告：</strong>
+      <ol>
+        <li>硕磐面试教训：一紧张把"不可重复读"和"幻读"对应的级别说反了——记住RC解决脏读，RR解决不可重复读+大部分幻读</li>
+        <li>说"RR完全解决幻读"是错的——MVCC只解决快照读幻读，当前读需要Gap Lock；快照读+当前读混用时仍可出现</li>
+        <li>不要死背表格，要从ReadView生成时机来解释为什么RC有不可重复读而RR没有</li>
+      </ol>
+    </div>
+
+    <div class="callout tip">
+      <strong>项目结合话术：</strong>"在信贷额度管理系统中，用户授信额度扣减是关键操作。我们在RR级别下通过SELECT FOR UPDATE锁定额度记录，防止并发扣减超额放款。同时在额度流水表上用唯一索引保证幂等性。曾有个线上问题：开发在RC的测试环境验证通过，但线上RR级别触发了间隙锁等待导致超时。后来我们统一了测试环境的隔离级别配置，避免环境差异导致的bug。"
+    </div>
   </div>
 
   <!-- Q3: MVCC -->
@@ -1924,6 +2091,104 @@ COMMIT;</code>
     </div>
 
     <div class="key-point">面试黄金回答：MVCC = 隐藏列(trx_id + roll_pointer) + undo log版本链 + ReadView。RC在每次执行SELECT时新建ReadView，RR在事务首次执行快照读时创建ReadView并在整个事务期间复用（注意不是BEGIN时创建）。可见性判断就是拿版本的trx_id和ReadView的四个字段做比较，沿版本链从新到旧找到第一个可见版本。</div>
+
+    <!-- MVCC 面试追问链 -->
+    <h4>面试追问链</h4>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>可见性判断的具体规则是什么？能画个版本链场景说明吗？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>对版本链中的某个版本，其trx_id记为X，按以下规则判断：</p>
+      <ol>
+        <li><strong>X == creator_trx_id</strong> → 可见（自己修改的，当然看得见）</li>
+        <li><strong>X &lt; min_trx_id</strong> → 可见（该事务在ReadView创建前已提交）</li>
+        <li><strong>X &gt;= max_trx_id</strong> → 不可见（该事务在ReadView创建后才开启）</li>
+        <li><strong>min_trx_id &lt;= X &lt; max_trx_id</strong> → 检查m_ids列表：
+          <ul>
+            <li>X在m_ids中 → 不可见（该事务还活跃未提交）</li>
+            <li>X不在m_ids中 → 可见（该事务已提交）</li>
+          </ul>
+        </li>
+      </ol>
+      <p><strong>举例：</strong>当前事务ID=5，ReadView: m_ids=[3,5], min_trx_id=3, max_trx_id=6</p>
+      <p>版本链：trx_id=7 → trx_id=4 → trx_id=3 → trx_id=2</p>
+      <ul>
+        <li>trx_id=7: 7 &gt;= max(6) → 不可见</li>
+        <li>trx_id=4: 3 &lt;= 4 &lt; 6，4不在m_ids中 → <strong>可见！返回此版本</strong></li>
+      </ul>
+      <p>事务5看到的是trx_id=4修改后的数据（事务4在ReadView创建时已提交）。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>MVCC能解决幻读吗？什么时候不能？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p><strong>MVCC能解决快照读的幻读，但不能解决当前读的幻读。</strong></p>
+      <p><strong>快照读</strong>（普通SELECT）：走MVCC，在RR级别下ReadView不变，其他事务新插入的行对当前事务不可见（trx_id &gt;= max_trx_id或在m_ids中），不会出现"第二次读多了行"的幻读。</p>
+      <p><strong>当前读</strong>（SELECT FOR UPDATE / INSERT / UPDATE / DELETE）：不走MVCC，读最新版本。防幻读靠<strong>Next-Key Lock</strong>锁住间隙阻止INSERT。</p>
+      <p><strong>面试陷阱场景：</strong></p>
+      <pre data-lang="sql"><code>-- 事务A
+SELECT * FROM t WHERE id = 5;          -- 快照读，看不到事务B
+UPDATE t SET name = 'X' WHERE id = 5;  -- 当前读！能看到最新数据
+SELECT * FROM t WHERE id = 5;          -- 再次快照读，但自己修改了(trx_id=自己)，看到新值</code></pre>
+      <p>这种"先快照读→当前读→再快照读"会观察到数据"突然出现"，因为UPDATE是当前读且修改后trx_id变成自己的，对自己的ReadView可见。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>undo log什么时候可以被清理？长事务对undo log有什么影响？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>undo log有两种：</p>
+      <ul>
+        <li><strong>insert undo log</strong>：INSERT产生，事务提交后可立即删除（因为INSERT的数据对其他事务不需要通过MVCC版本链访问）</li>
+        <li><strong>update undo log</strong>：UPDATE/DELETE产生，<strong>不能立即删除</strong>，要等到没有任何活跃ReadView需要这个版本时才能被purge线程清理</li>
+      </ul>
+      <p><strong>清理条件：</strong>系统中最早活跃ReadView的min_trx_id = N，那么trx_id &lt; N 的 undo log 版本<strong>在同一行存在更新的可见版本时</strong>可被 purge 线程清理。</p>
+      <p><strong>长事务的危害：</strong>如果一个事务开启后长时间不提交，它的ReadView会"钉住"一个很早的min_trx_id，导致这个ID之后的所有undo log都无法被purge清理。后果：</p>
+      <ol>
+        <li>undo tablespace持续膨胀（我们遇到过涨到20GB的事故）</li>
+        <li>版本链变长，其他事务快照读需要遍历长链才能找到可见版本，查询变慢</li>
+        <li>磁盘空间告警</li>
+      </ol>
+      <p><strong>我们的规范</strong>：DBA设置 <code>innodb_undo_log_truncate=ON</code>，事务超200ms告警，超5s强制kill。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>为什么RC级别要每次SELECT都创建新ReadView？能复用吗？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>不能复用。因为RC（读已提交）的语义就是：<strong>每次读都能看到其他事务最新提交的数据</strong>。</p>
+      <p>如果RC也复用第一次的ReadView，那行为就和RR一模一样了——永远看到第一次读时的快照，这与RC的隔离级别定义矛盾。</p>
+      <p><strong>新ReadView的效果：</strong></p>
+      <pre data-lang="sql"><code>-- RC级别下m_ids随时间变化：
+-- 第一次读: m_ids = [3, 5, 7]  → 3,5,7还活跃，它们的修改不可见
+-- 事务3提交
+-- 第二次读: m_ids = [5, 7]     → 3不在了，3的修改可见
+-- 事务5提交
+-- 第三次读: m_ids = [7]        → 5不在了，5的修改也可见</code></pre>
+      <p>每次新ReadView只包含当前时刻还活跃的事务，已提交事务的修改自然变为可见。这就是"读已提交"名字的由来。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>ReadView是在BEGIN时创建还是第一次SELECT时创建？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p><strong>是在第一次执行快照读（普通SELECT）时创建，不是BEGIN时</strong>。这是一个面试高频坑点。</p>
+      <p><strong>验证场景：</strong></p>
+      <pre data-lang="sql"><code>-- 事务A                          -- 事务B
+BEGIN;                            BEGIN;
+                                  INSERT INTO t VALUES(100, 'new');
+                                  COMMIT;
+SELECT * FROM t WHERE id=100;
+-- 能看到id=100！因为ReadView是此时才创建的
+-- 此时B已提交，不在m_ids中，所以可见</code></pre>
+      <p>如果ReadView在BEGIN时创建，那事务A就看不到B的插入了。但实际RR下事务A能看到——因为ReadView延迟到第一次SELECT时才创建，此时B已提交。</p>
+      <p><strong>实际影响</strong>：如果BEGIN后先执行了DML（INSERT/UPDATE）再SELECT，ReadView在SELECT时才创建。这意味着BEGIN和第一次SELECT之间提交的其他事务对当前事务可见。</p></div>
+    </div>
+
+    <div class="callout warn">
+      <strong>踩坑警告：</strong>
+      <ol>
+        <li>硕磐面试被问MVCC细节说不清——版本链+ReadView四字段+判断规则必须能画出来</li>
+        <li>混淆快照读和当前读——FOR UPDATE是当前读，读最新版本，不走版本链</li>
+        <li>说"MVCC解决幻读"不完整——只解决快照读场景，当前读靠Next-Key Lock</li>
+      </ol>
+    </div>
+
+    <div class="callout tip">
+      <strong>项目结合话术：</strong>"在信贷系统中，隔离级别用的是默认RR。用户申请授信时读取当前额度用的是SELECT FOR UPDATE（当前读），不是快照读，因为额度判断必须基于最新数据。同时Next-Key Lock防止并发授信超额。报表查询场景则利用MVCC快照读，不加锁不影响线上写。DBA规范要求事务持有不超200ms，之前有次事故就是事务忘提交导致undo tablespace涨到20GB。"
+    </div>
   </div>
 
   <!-- Q4: 当前读与快照读 -->
@@ -3195,10 +3460,114 @@ WHERE OBJECT_NAME = 't';
     </div>
   </article>
 
+  <!-- 间隙锁(Gap Lock)面试追问链 -->
+  <div class="question-block" style="margin-top:24px;margin-bottom:48px;">
+    <h4>面试追问链</h4>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>Gap Lock之间会互相阻塞吗？两个事务能同时持有同一间隙的Gap Lock吗？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p><strong>Gap Lock之间不互斥！</strong>这是一个经典易错点。两个事务可以同时持有完全相同间隙的Gap Lock。</p>
+      <p>原因：Gap Lock的唯一目的是<strong>阻止INSERT</strong>，它不需要和其他Gap Lock互斥。只有INSERT操作的"插入意向锁（Insert Intention Lock）"才会被Gap Lock阻塞。</p>
+      <p><strong>兼容性矩阵（简化）：</strong></p>
+      <ul>
+        <li>Gap Lock vs Gap Lock = 兼容（两个事务都能成功加锁）</li>
+        <li>Gap Lock vs Insert Intention Lock = 冲突（INSERT被阻塞）</li>
+        <li>Record Lock vs Record Lock = 冲突（X锁互斥）</li>
+      </ul>
+      <p>这个特性直接导致了经典的"先查后插"死锁模式。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>间隙锁导致的经典死锁场景是什么？你们在信贷系统中踩过这个坑吗？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p><strong>经典场景："先查后插"模式</strong></p>
+      <pre data-lang="sql"><code>-- 表t有记录: id = 1, 5, 10
+-- 事务A
+BEGIN;
+SELECT * FROM t WHERE id = 7 FOR UPDATE;  -- id=7不存在，加Gap Lock(5,10)
+
+-- 事务B
+BEGIN;
+SELECT * FROM t WHERE id = 8 FOR UPDATE;  -- id=8不存在，也加Gap Lock(5,10) —— 不冲突！
+
+-- 事务A
+INSERT INTO t VALUES(7, ...);  -- 被阻塞！B持有的Gap Lock阻止插入
+
+-- 事务B
+INSERT INTO t VALUES(8, ...);  -- 被阻塞！A持有的Gap Lock阻止插入
+
+-- 死锁！InnoDB检测到后回滚代价小的事务</code></pre>
+      <p><strong>我们信贷系统的踩坑经历：</strong>用户申请放款时，先SELECT FOR UPDATE查询是否有进行中的放款单，如果没有则INSERT新放款单。两个并发请求都查到"不存在"（各自拿到Gap Lock），然后都尝试INSERT，互相等待，死锁。</p>
+      <p><strong>解决方案：</strong>改为 <code>INSERT ... ON DUPLICATE KEY UPDATE</code> 配合唯一索引（user_id + status的联合唯一索引），把"查+插"变成一步原子操作。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>Next-Key Lock什么时候会退化为Record Lock？什么时候退化为Gap Lock？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>InnoDB默认加锁单位是Next-Key Lock，但有两个<strong>优化退化规则</strong>：</p>
+      <p><strong>退化为Record Lock</strong>（三个条件全满足）：</p>
+      <ol>
+        <li>是唯一索引（主键或UNIQUE索引）</li>
+        <li>是等值查询（不是范围查询）</li>
+        <li>查询命中了记录（记录存在）</li>
+      </ol>
+      <p><strong>退化为Gap Lock</strong>：</p>
+      <ol>
+        <li>唯一索引等值查询，但<strong>记录不存在</strong>（只需要锁间隙防止插入，不需要锁记录）</li>
+        <li>普通索引等值查询时，向右遍历到<strong>第一个不满足条件的值</strong>，该值上的Next-Key Lock退化为Gap Lock</li>
+      </ol>
+      <p><strong>面试口诀</strong>：唯一索引等值命中 → Record Lock；唯一索引等值未命中 → Gap Lock；<strong>非唯一索引等值查询</strong> → Next-Key Lock（但向右遍历到第一个不等值记录时退化为 Gap Lock）；范围查询 → Next-Key Lock。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>RC隔离级别下有Gap Lock吗？切换到RC能解决间隙锁死锁问题吗？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p><strong>RC 级别下普通的当前读（SELECT FOR UPDATE / UPDATE / DELETE）不加 Gap Lock</strong>。这是RC和RR在加锁行为上的核心区别之一。例外：INSERT 检查唯一约束时仍可能产生 Gap Lock，外键约束检查时也会使用 Gap Lock。</p>
+      <p>切换到RC确实能消除Gap Lock导致的死锁，而且并发度更高（锁粒度更小）。这也是为什么阿里、字节内部很多业务选择RC级别。</p>
+      <p><strong>但要注意代价：</strong></p>
+      <ol>
+        <li>RC下无法防止幻读（当前读场景）——如果业务依赖"范围锁定"防止插入，RC做不到</li>
+        <li>需要配合ROW格式binlog（STATEMENT格式在RC下可能主从不一致）</li>
+        <li>切换隔离级别需要全量业务回归，可能引发未预期的并发问题</li>
+      </ol>
+      <p><strong>我们的决策</strong>：核心信贷表保持RR（额度扣减需要间隙锁保护），但高并发写入的流水表我们通过业务层设计避免"先查后插"模式来规避Gap Lock死锁，而不是切RC。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>如何用performance_schema定位间隙锁导致的阻塞或死锁？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>MySQL 8.0提供了精确的锁信息查询：</p>
+      <pre data-lang="sql"><code>-- 1. 查看当前所有行级锁（包含Gap Lock信息）
+SELECT ENGINE_TRANSACTION_ID, INDEX_NAME, LOCK_TYPE, LOCK_MODE, LOCK_STATUS, LOCK_DATA
+FROM performance_schema.data_locks
+WHERE OBJECT_NAME = 'your_table';
+
+-- LOCK_MODE解读:
+-- X           → Record Lock (排他)
+-- X,GAP       → Gap Lock
+-- X,REC_NOT_GAP → 纯Record Lock（非Next-Key）
+-- S           → Shared Next-Key Lock
+
+-- 2. 查看锁等待关系
+SELECT * FROM performance_schema.data_lock_waits;
+
+-- 3. 查看最近一次死锁信息
+SHOW ENGINE INNODB STATUS\G
+-- 在LATEST DETECTED DEADLOCK区域可以看到两个事务各自持有和等待的锁</code></pre>
+      <p><strong>实战技巧</strong>：线上出现锁等待超时（Lock wait timeout exceeded）时，先查data_lock_waits找到阻塞源头事务ID，再通过INNODB_TRX表找到对应SQL，kill掉长事务。</p></div>
+    </div>
+
+    <div class="callout warn">
+      <strong>踩坑警告：</strong>
+      <ol>
+        <li>说"MVCC解决幻读"时没有区分快照读和当前读——快照读靠MVCC，当前读靠Next-Key Lock</li>
+        <li>以为Gap Lock之间互斥——实际不互斥！只和INSERT意向锁冲突</li>
+        <li>忽略了"间隙锁只在RR级别存在"这个前提——RC下不加Gap Lock</li>
+      </ol>
+    </div>
+
+    <div class="callout tip">
+      <strong>项目结合话术：</strong>"我们信贷系统有个真实案例：用户并发申请放款时，两个请求都SELECT FOR UPDATE查到'无进行中的放款单'，各自拿到Gap Lock后尝试INSERT新放款单，互相等待形成死锁。报警后通过SHOW ENGINE INNODB STATUS定位到死锁原因，最终改为INSERT ON DUPLICATE KEY UPDATE配合联合唯一索引（user_id + loan_status），把查和插合为一步原子操作，彻底消除了这个死锁模式。"
+    </div>
+  </div>
+
   <!-- Q3 -->
-  <article id="lock-q3" class="qa-block" style="margin-bottom:48px;">
-    <h3 style="color:#1565C0;border-bottom:2px solid #1565C0;padding-bottom:8px;">
-      Q3: 什么情况下行锁会升级为表锁？
     </h3>
     <div class="answer">
       <p><strong>严格来说，InnoDB不存在"锁升级"（Lock Escalation）机制。</strong>这是一个常见的面试误区。SQL Server有锁升级，但InnoDB没有。</p>
@@ -5896,6 +6265,84 @@ WHERE o.order_date > '2024-06-01';
     <div class="key-point">
       <strong>核心原则：</strong>优化目标是让 type 至少达到 range 级别，避免 ALL/index；同时确保 Extra 中不出现 Using filesort 和 Using temporary。
     </div>
+
+    <!-- EXPLAIN 面试追问链 -->
+    <h4>面试追问链</h4>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>EXPLAIN的rows列是精确值吗？什么时候会严重不准？怎么获取真实执行数据？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>rows是<strong>优化器基于统计信息的估算值</strong>，不是精确值。严重不准的场景：</p>
+      <ol>
+        <li><strong>统计信息过期</strong>：InnoDB通过采样（默认8个页）估算索引基数（cardinality）。如果数据分布变化大但未更新统计信息，估算可能偏差10倍以上</li>
+        <li><strong>数据分布不均匀</strong>：某个值占比极高（如status=0占99%），但统计信息是均匀假设</li>
+        <li><strong>关联子查询</strong>：MySQL对子查询的rows估算经常不准</li>
+      </ol>
+      <p><strong>获取真实执行数据：</strong></p>
+      <pre data-lang="sql"><code>-- MySQL 8.0.18+ EXPLAIN ANALYZE（真正执行SQL并返回实际行数和耗时）
+EXPLAIN ANALYZE SELECT * FROM orders WHERE user_id = 100;
+-- 输出: actual time=0.5..2.3, rows=150, loops=1
+
+-- 对比 EXPLAIN 的估算 rows 和 ANALYZE 的实际 rows
+-- 如果差距超过10倍，考虑 ANALYZE TABLE 更新统计信息
+ANALYZE TABLE orders;</code></pre></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>Extra列出现"Using filesort"一定要优化吗？什么情况下优化器会选择filesort？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p><strong>不一定要优化</strong>，取决于排序的数据量：</p>
+      <ul>
+        <li>如果排序结果集<strong>很小</strong>（如WHERE筛选后只有几十条），filesort在内存中快速完成（sort_buffer_size），性能可接受</li>
+        <li>如果排序结果集<strong>很大</strong>（数万条以上），filesort需要多次磁盘归并排序，严重影响性能</li>
+      </ul>
+      <p><strong>优化器选择filesort的原因：</strong></p>
+      <ol>
+        <li>ORDER BY的列没有索引</li>
+        <li>ORDER BY的列有索引，但优化器认为走该索引的代价（随机IO回表）比全表扫描+内存排序更高</li>
+        <li>联合索引不满足ORDER BY的列序（如索引是(a,b)但ORDER BY a, c）</li>
+      </ol>
+      <p><strong>优化方案</strong>：创建覆盖ORDER BY的联合索引。经典模式：<code>WHERE条件列 + ORDER BY列</code> 建联合索引，让索引既能过滤又能排序。</p>
+      <pre data-lang="sql"><code>-- 典型优化：消除filesort
+-- 原SQL: SELECT * FROM orders WHERE status=1 ORDER BY create_time LIMIT 20;
+-- 索引: INDEX idx_status_time(status, create_time)
+-- 优化后 EXPLAIN: type=ref, Using index condition (无filesort)</code></pre></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>EXPLAIN中type=index和type=ALL有什么区别？index不是挺好的吗？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p><strong>type=index也是"全扫描"，只不过扫的是索引树而不是数据文件</strong>。性能等级上：index只比ALL好一点，某些场景下甚至更差。</p>
+      <p><strong>区别：</strong></p>
+      <ul>
+        <li><strong>ALL</strong>：扫描聚簇索引的所有叶子节点（即全部数据页），每页包含完整的行数据</li>
+        <li><strong>index</strong>：扫描某个二级索引的所有叶子节点。如果查询列都在这个索引中（覆盖索引），则无需回表；否则每行都要回表，可能比ALL更慢</li>
+      </ul>
+      <p><strong>面试关键点</strong>：type=index配合Extra=Using index（覆盖索引）才是好的；如果type=index但Extra没有Using index，说明在做全索引扫描+逐条回表，性能很差。</p>
+      <pre data-lang="sql"><code>-- type=index + Using index = 好（覆盖索引全扫描）
+EXPLAIN SELECT user_id FROM orders;  -- 走idx_user_id，无需回表
+
+-- type=index 没有 Using index = 差（全索引扫描+回表）
+EXPLAIN SELECT * FROM orders ORDER BY user_id;  -- 按索引顺序逐条回表</code></pre></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>多表JOIN时怎么读EXPLAIN？优化器选择驱动表的依据是什么？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>多表JOIN时EXPLAIN输出多行，<strong>第一行是驱动表（外层循环），后续行是被驱动表（内层循环）</strong>。</p>
+      <p><strong>优化器选择驱动表的原则</strong>：选择过滤后<strong>结果集最小</strong>的表作为驱动表（不是表本身最小，而是WHERE过滤后剩余行数最少）。因为嵌套循环的总代价 = 驱动表行数 x 被驱动表单次查询代价。</p>
+      <p><strong>读EXPLAIN的要点：</strong></p>
+      <ol>
+        <li>驱动表的rows x 被驱动表的rows = 总扫描量（乘积越小越好）</li>
+        <li>被驱动表的type应该是eq_ref或ref（通过索引定位），如果是ALL就是灾难（嵌套全表扫描）</li>
+        <li>关注被驱动表的key列，如果是NULL说明缺索引</li>
+      </ol>
+      <pre data-lang="sql"><code>-- 优化案例: 小表驱动大表
+-- users(1000行) JOIN orders(100万行) ON users.id = orders.user_id
+-- 优化器应选users为驱动表：1000次索引查找 vs 100万次索引查找
+-- 如果优化器选错，用STRAIGHT_JOIN强制驱动顺序
+SELECT STRAIGHT_JOIN o.* FROM users u JOIN orders o ON u.id = o.user_id WHERE u.vip=1;</code></pre></div>
+    </div>
+
+    <div class="callout tip">
+      <strong>项目结合话术：</strong>"我们信贷系统的慢SQL优化流程是：先pt-query-digest定位TOP慢SQL，然后EXPLAIN看执行计划。我印象最深的一次优化是一个放款查询，EXPLAIN显示type=ALL、rows=200万。原因是WHERE条件对create_time做了DATE_FORMAT函数处理导致索引失效。改写成范围查询后type变成range，rows降到3000，响应时间从3秒降到20毫秒。另外我习惯用EXPLAIN ANALYZE对比估算行数和实际行数，统计信息不准时及时ANALYZE TABLE。"
+    </div>
   </div>
 
   <!-- Q2: 慢查询 -->
@@ -6581,6 +7028,84 @@ CREATE TABLE orders_0000 (
 </div>
 <!-- SUPPLEMENT: GLOBAL-ID END -->
 
+  <!-- 分库分表 面试追问链 -->
+  <div class="question-block" style="margin-top:24px;">
+    <h4>面试追问链</h4>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>你们信贷系统的分库分表是怎么做的？分片键怎么选的？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>我们的订单流水表按<strong>user_id做hash分片，分16库x64表=1024张表</strong>。选user_id作为分片键的原因：</p>
+      <ol>
+        <li><strong>查询亲和</strong>：90%以上的查询都带user_id（"查某用户的放款记录"），可以精准路由到单库单表</li>
+        <li><strong>数据均匀</strong>：user_id是雪花ID，hash后分布均匀，不会出现热点分片</li>
+        <li><strong>业务不可变</strong>：user_id一旦确定不会修改，避免分片键变更导致数据迁移</li>
+      </ol>
+      <p><strong>路由策略</strong>：<code>库号 = hash(user_id) % 16</code>，<code>表号 = hash(user_id) / 16 % 64</code>。使用ShardingSphere-JDBC做路由，对业务代码透明。</p>
+      <p><strong>全局唯一ID</strong>：用改进版Snowflake（美团Leaf），保证分布式环境下ID全局唯一且趋势递增（对B+树友好）。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>分库分表后跨库JOIN怎么办？跨库分页呢？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p><strong>跨库JOIN的三种方案：</strong></p>
+      <ol>
+        <li><strong>全局表（广播表）</strong>：将小表（如产品表、配置表）全量复制到所有分片，JOIN时本地完成。适合读多写少的字典类数据</li>
+        <li><strong>应用层组装</strong>：先查主表获得关联ID，再批量查关联表，在内存中拼装。我们大部分场景用这个</li>
+        <li><strong>字段冗余</strong>：在订单表冗余product_name等常用字段，空间换时间，避免JOIN</li>
+      </ol>
+      <p><strong>跨库分页（深分页问题）：</strong></p>
+      <p><code>SELECT * FROM orders ORDER BY create_time LIMIT 100000, 10</code> 在1024张表上执行，理论上每个分片都要返回100010条再归并，这是灾难。</p>
+      <p><strong>解决方案：</strong></p>
+      <ol>
+        <li><strong>禁止深分页</strong>：产品层面限制只能翻前100页，覆盖99%场景</li>
+        <li><strong>游标分页</strong>：<code>WHERE create_time &gt; '上一页最后一条的时间' LIMIT 10</code>，每个分片只取10条再归并</li>
+        <li><strong>ES辅助</strong>：需要复杂排序分页的场景走ES，ES天然支持分布式分页</li>
+      </ol></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>分库分表后如何保证跨库事务一致性？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>分布式事务是分库分表最难的问题，没有银弹，只有trade-off：</p>
+      <table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:14px;">
+        <tr style="background:#1565C0;color:white;"><th style="padding:8px;border:1px solid #ddd;">方案</th><th style="padding:8px;border:1px solid #ddd;">原理</th><th style="padding:8px;border:1px solid #ddd;">一致性</th><th style="padding:8px;border:1px solid #ddd;">性能</th><th style="padding:8px;border:1px solid #ddd;">适用场景</th></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>本地事务+MQ</strong></td><td style="padding:8px;border:1px solid #ddd;">本地事务写业务表+消息表，MQ异步通知</td><td style="padding:8px;border:1px solid #ddd;">最终一致</td><td style="padding:8px;border:1px solid #ddd;">高</td><td style="padding:8px;border:1px solid #ddd;">大部分场景（我们用这个）</td></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>TCC</strong></td><td style="padding:8px;border:1px solid #ddd;">Try预留-Confirm确认-Cancel撤销</td><td style="padding:8px;border:1px solid #ddd;">最终一致</td><td style="padding:8px;border:1px solid #ddd;">中</td><td style="padding:8px;border:1px solid #ddd;">金融扣款等需要确认的场景</td></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Seata AT</strong></td><td style="padding:8px;border:1px solid #ddd;">框架自动生成反向SQL做补偿</td><td style="padding:8px;border:1px solid #ddd;">最终一致</td><td style="padding:8px;border:1px solid #ddd;">中</td><td style="padding:8px;border:1px solid #ddd;">对业务侵入要求低的场景</td></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>XA</strong></td><td style="padding:8px;border:1px solid #ddd;">两阶段提交（2PC）</td><td style="padding:8px;border:1px solid #ddd;">强一致</td><td style="padding:8px;border:1px solid #ddd;">差</td><td style="padding:8px;border:1px solid #ddd;">生产慎用，性能极差</td></tr>
+      </table>
+      <p><strong>我们信贷系统的做法</strong>：放款场景用TCC模式（Seata），先Try冻结额度，调用资金方成功后Confirm扣减，失败则Cancel回滚冻结。普通的流水记录写入用本地事务+MQ异步同步到其他分片。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>非分片键查询怎么路由？比如按订单号查询，但分片键是user_id？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>这是分库分表绕不开的问题。我们用了<strong>三种方案组合</strong>：</p>
+      <ol>
+        <li><strong>基因法（推荐）</strong>：在order_no中嵌入user_id的分片信息。比如order_no的后4位 = user_id % 1024的编码，这样通过order_no就能直接算出分片位置，无需额外查询</li>
+        <li><strong>映射表</strong>：维护一张全局映射表 <code>order_no -&gt; user_id</code>，先查映射表获得user_id再路由。映射表本身按order_no分片</li>
+        <li><strong>ES辅助索引</strong>：所有订单数据异步同步到ES，非分片键查询走ES获得user_id后再回源MySQL。适合复杂搜索场景</li>
+      </ol>
+      <p><strong>我们的选择</strong>：高频的order_no查询用基因法；运营后台的多维度模糊查询走ES；极少数的ad-hoc查询广播所有分片（接受慢）。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>分库分表后如何做数据迁移和扩容？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p><strong>扩容策略取决于分片算法：</strong></p>
+      <p><strong>翻倍扩容法（推荐）</strong>：16库扩到32库。利用MySQL主从复制：</p>
+      <ol>
+        <li>给每个库加一个从库（16主变成16主16从）</li>
+        <li>修改路由规则：原来 hash%16，现在 hash%32</li>
+        <li>将从库提升为主库（切断复制）</li>
+        <li>各库删除不属于自己的数据（后台慢慢清理）</li>
+      </ol>
+      <p>全程无需停机，只需在切换路由的瞬间做一次短暂的写入暂停（秒级）。</p>
+      <p><strong>一致性Hash扩容</strong>：如果用一致性Hash，新增节点只需迁移相邻节点的部分数据，影响范围更小。但实现复杂度更高。</p>
+      <p><strong>我们的实际经验</strong>：初始设计时就规划了足够的分片数（1024表），短期内不需要扩容。如果真要扩容，采用翻倍法+双写灰度切换。</p></div>
+    </div>
+
+    <div class="callout tip">
+      <strong>项目结合话术：</strong>"我们信贷系统的放款流水表是分库分表的核心场景。选择user_id做分片键是因为业务查询pattern——用户查自己的放款记录是第一高频接口。分片策略是16库x64表=1024张分片，用ShardingSphere-JDBC路由。跨库事务用Seata TCC保证放款的额度一致性。全局唯一ID用Leaf的Snowflake模式。唯一的痛点是运营后台需要按时间范围+状态的组合查询，这个走了ES辅助索引来解决。"
+    </div>
+  </div>
+
   <!-- Q6: 大表DDL -->
   <div id="tune-q6" class="qa-block">
     <h3><span class="q-num">6</span>大表 DDL 安全执行 / Online DDL / 无锁变更</h3>
@@ -6823,6 +7348,69 @@ SET GLOBAL innodb_online_alter_log_max_size = 2 * 1024 * 1024 * 1024;  -- 2GB</c
       2. 简单加索引用 Online DDL (INPLACE, LOCK=NONE)<br>
       3. 复杂变更（改列类型等）用 pt-osc 或 gh-ost<br>
       4. 无论哪种方式，都要在低峰期执行，提前 kill 长事务
+    </div>
+
+    <!-- Online DDL 面试追问链 -->
+    <h4>面试追问链</h4>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>Online DDL执行过程中如果有长事务未提交会怎样？你们生产上怎么应对的？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>Online DDL在开始和结束阶段都需要获取MDL排他锁。如果此时有未提交的长事务持有MDL读锁，DDL就会被阻塞。更严重的是，DDL在等待MDL写锁期间，<strong>后续所有对该表的DML和SELECT都会被阻塞</strong>（因为它们也需要获取MDL读锁，而MDL是公平锁，写锁请求排在前面会阻塞后续读锁请求）。结果就是雪崩式的连接堆积。</p>
+      <p><strong>我们的应对策略：</strong></p>
+      <ol>
+        <li>DDL执行前先查 <code>information_schema.INNODB_TRX</code>，kill掉超过60秒的长事务</li>
+        <li>使用 <code>lock_wait_timeout=5</code>，如果5秒拿不到MDL锁就放弃，不堵塞后续查询</li>
+        <li>在低峰期执行，并配合监控告警</li>
+        <li>大表DDL统一走gh-ost，因为gh-ost的cut-over阶段MDL锁持有时间更短更可控</li>
+      </ol></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>gh-ost相比pt-osc的核心优势是什么？为什么大厂更偏好gh-ost？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>核心优势是<strong>无触发器</strong>。pt-osc用触发器同步增量变更，有三个硬伤：</p>
+      <ol>
+        <li><strong>性能开销</strong>：每条DML都要额外触发一次触发器执行，高并发写入场景下约10-20%性能下降</li>
+        <li><strong>触发器冲突</strong>：MySQL一张表同一事件只能有一个同类型触发器，如果业务已用触发器则无法使用pt-osc</li>
+        <li><strong>不可暂停</strong>：触发器一旦创建就持续工作，无法动态调速</li>
+      </ol>
+      <p>gh-ost通过<strong>解析binlog</strong>来同步增量，对原表完全零侵入。可以动态调速（throttle）、暂停恢复、甚至在从库上先测试（--test-on-replica）。GitHub、字节、美团的DBA平台底层都用gh-ost。</p>
+      <p><strong>但gh-ost也有前提</strong>：必须开启ROW格式binlog，且binlog_row_image=FULL。我们信贷系统本身就是ROW格式，所以直接上gh-ost。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>INSTANT DDL的原理是什么？为什么能做到毫秒级完成？有什么限制？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>INSTANT DDL本质是<strong>只修改数据字典（元数据）</strong>，完全不碰数据文件。新加的列的默认值存储在数据字典中，已有的数据行在读取时动态"虚拟填充"这个默认值——物理上这些行并没有被修改。</p>
+      <p><strong>限制条件（面试必答）：</strong></p>
+      <ol>
+        <li>MySQL 8.0.12+ 才支持，且最初只能在<strong>最后一列</strong>加列（8.0.29+解除位置限制）</li>
+        <li>不支持加索引、改列类型、删列等操作</li>
+        <li>不支持压缩表、包含全文索引的表</li>
+        <li>不支持临时表</li>
+        <li>加列后表的ROW_FORMAT如果是REDUNDANT则不支持</li>
+      </ol>
+      <p><strong>踩坑</strong>：很多人以为所有DDL都能INSTANT，实际上能INSTANT的只有"加列"和少数元数据修改（如改默认值、rename列）。加索引必须走INPLACE。</p></div>
+    </div>
+
+    <div class="qa">
+      <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>gh-ost的cut-over（表名交换）阶段具体怎么实现的？和pt-osc的RENAME有什么区别？</p></div>
+      <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span><p>这是gh-ost的精华设计。pt-osc用的是<strong>RENAME TABLE</strong>原子交换：<code>RENAME TABLE original TO _old, _ghost TO original</code>，这本身是原子操作，很快。</p>
+      <p>gh-ost的cut-over更精巧，使用<strong>原子性lock-rename-unlock</strong>方案：</p>
+      <ol>
+        <li>创建一个sentry表（哨兵表）来阻塞原表的写入</li>
+        <li>在同一个会话中执行 <code>LOCK TABLES original WRITE, _ghost WRITE</code></li>
+        <li>在另一个会话中用 <code>RENAME TABLE</code> 做交换（此时被LOCK阻塞）</li>
+        <li>在lock会话中 <code>DROP TABLE sentry</code>，然后 <code>UNLOCK TABLES</code></li>
+        <li>RENAME立即执行，完成交换</li>
+      </ol>
+      <p>整个过程MDL排他锁持有时间极短（亚秒级）。如果cut-over失败，可以安全重试而不丢数据。</p></div>
+    </div>
+
+    <div class="callout warn">
+      <strong>踩坑警告（吉利二面复盘）：</strong>被问"大表加列会锁表吗"时没有区分MySQL版本和算法。正确分层回答：8.0+用INSTANT不锁表；5.7/5.6用INPLACE仅短暂MDL锁；5.5及之前用COPY全程锁表。面试时先说INSTANT，再说Online DDL，最后才说第三方工具，体现技术选型的层次感。
+    </div>
+
+    <div class="callout tip">
+      <strong>项目结合话术：</strong>"我们信贷系统有一张payment_order表，数据量2亿+。之前在吉利二面被问到这个问题没答好，后来专门研究了。我们的实际操作是：简单加列走MySQL 8.0的INSTANT DDL；加索引用Online DDL（INPLACE + LOCK=NONE），执行前先kill长事务；涉及改列类型这种重量操作统一走gh-ost，由DBA在低峰期执行。我们还在gh-ost外层包了一层自动化脚本，集成了前置检查（长事务扫描、磁盘空间检查、主从延迟检查）和执行后的数据校验。"
     </div>
   </div>
 

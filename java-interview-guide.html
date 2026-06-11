@@ -529,7 +529,7 @@ System.out.println(s1 == s4);   <span class="cmt">// true  —— intern() 返�
             </div>
             <div class="qa-answer">
                 <span class="qa-badge qa-badge-a">A</span>
-                <p>①计算hash：(key == null) ? 0 : (h = key.hashCode()) ^ (h &gt;&gt;&gt; 16)——高16位异或低16位，让高位也参与桶下标计算（扰动函数，减少碰撞）②定位桶：(n-1) &amp; hash（等价于hash%n，前提n是2的幂）③桶为空：直接放入新Node ④桶非空：遍历链表/红黑树，key相同（==或equals）则覆盖旧值；不同则尾插法插入新节点 ⑤链表长度≥8且数组长度≥64→树化；数组长度&lt;64则优先扩容 ⑥插入后size&gt;threshold（capacity×loadFactor默认0.75）→扩容（resize为2倍）。</p>
+                <p>①计算hash：(key == null) ? 0 : (h = key.hashCode()) ^ (h &gt;&gt;&gt; 16)——高16位异或低16位，让高位也参与桶下标计算（扰动函数，减少碰撞）②定位桶：(n-1) &amp; hash（等价于hash%n，前提n是2的幂）③桶为空：直接放入新Node ④桶非空：遍历链表/红黑树，key相同（==或equals）则覆盖旧值；不同则尾插法插入新节点 ⑤链表中已有 8 个节点时再插入第 9 个触发 treeifyBin()；若此时数组长度 ≥ 64 则树化，否则优先扩容 ⑥插入后size&gt;threshold（capacity×loadFactor默认0.75）→扩容（resize为2倍）。</p>
             </div>
         </div>
 
@@ -554,6 +554,80 @@ System.out.println(s1 == s4);   <span class="cmt">// true  —— intern() 返�
                 <p>必须同时正确重写equals()和hashCode()，且满足契约：①equals相等的对象hashCode必须相等 ②hashCode相等的对象equals不一定相等。常见陷阱：①key对象是可变的——put之后修改了key的字段导致hashCode变化，此后get/remove都找不到该entry（实际还在Map中但桶位置对不上了）→key应该是不可变对象（如String、Integer，或自定义的final+final字段类）②只重写equals不重写hashCode→两个"相等"的key被放入不同桶，Map出现逻辑重复 ③hashCode分布不均→大量碰撞退化为链表→性能从O(1)退化为O(N)。最佳实践：用Record或Lombok@Value做key（自动生成正确的equals/hashCode，且不可变）。</p>
             </div>
         </div>
+
+        <h4>面试追问链</h4>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>HashMap在并发环境下有什么问题？JDK 1.7和1.8有什么区别？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>HashMap不是线程安全的。JDK 1.7使用头插法，并发扩容时会形成环形链表导致死循环（CPU 100%）。JDK 1.8改为尾插法解决了环形链表问题，但仍然不安全——并发put会导致数据丢失，size计数也不准确。核心区别：1.7的问题会导致系统hang死（死循环），1.8的问题是静默的数据丢失，反而更难排查。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>JDK 1.7 头插法如何导致环形链表？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>扩容时transfer()方法用头插法迁移节点。线程1执行到 e=A, next=B 时被挂起；线程2完整执行完迁移得到 B→A→null；线程1恢复后，由于B.next已经被线程2改为指向A，继续头插会造成 A.next=B 且 B.next=A，形成环形链表。后续get()遍历到这个桶时就会死循环。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>JDK 1.8 尾插法为什么还不安全？具体会出什么问题？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p><strong>数据丢失</strong>：两个线程同时put且计算出相同桶位置，都判断tab[i]==null为true，先后写入，后写入的覆盖前者导致数据丢失。<strong>size不准</strong>：++size不是原子操作（读-加-写三步），并发执行会导致计数偏小。</p>
+            </div>
+        </div>
+
+        <pre data-lang="java"><code>// JDK 1.8 并发数据丢失场景
+// 线程A和线程B同时put，计算出相同的桶位置i，tab[i]当前为null
+// 线程A判断 tab[i] == null → true，准备写入，被挂起
+// 线程B判断 tab[i] == null → true，写入 tab[i] = nodeB
+// 线程A恢复，写入 tab[i] = nodeA → nodeB丢失！
+
+// ++size 也不是原子操作：
+// temp = size;      // 读
+// temp = temp + 1;  // 加
+// size = temp;      // 写
+// 两个线程同时执行，size从10只增到11而不是12</code></pre>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>为什么JDK 8改用尾插法？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>①避免死循环：尾插法在扩容时保持链表原始顺序，不会出现指针反转，不可能形成环。②JDK 8引入红黑树（链表长度&gt;8时树化），树化需要保持插入顺序，头插法会打乱顺序。③设计哲学：HashMap不保证线程安全，但"死循环导致CPU 100%"太严重了（影响整个JVM进程），所以修掉了这个问题。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>负载因子为什么是0.75？树化阈值为什么是8？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>0.75是时间和空间的折中：基于泊松分布，当负载因子为0.75时，每个桶中元素数量超过8的概率不到千万分之一（0.00000006）。太大（如1.0）冲突多、链表长、查找慢；太小（如0.5）空间浪费严重。树化阈值选8也是基于这个概率——绝大多数桶不会触发树化，但极端情况下红黑树保证O(logN)查询。</p>
+            </div>
+        </div>
+
+        <div class="callout warn"><p><strong>踩坑警告</strong>：不要说"JDK8的HashMap是线程安全的"——它只是不会死循环了，数据一致性问题仍然存在。面试时能画出环形链表形成过程直接加分，建议提前练习。</p></div>
+
+        <div class="callout tip"><p><strong>项目结合话术</strong>："在信贷系统中我们有个本地缓存用了HashMap，存放用户的临时授信计算结果。上线后发现偶发CPU飙高，排查发现是JDK7环境下HashMap并发put触发了扩容死循环。修复方案是改用ConcurrentHashMap，同时加了缓存大小限制避免频繁扩容。后来升级JDK17后虽然不会死循环了，我们仍然坚持用ConcurrentHashMap，因为数据一致性在金融场景下不可妥协。"</p></div>
+
     </div>
 
     <!-- 1.4 equals & hashCode -->
@@ -1119,6 +1193,67 @@ System.out.println(a.getClass() == b.getClass()); <span class="cmt">// true!</sp
                 <p><strong>1. SPI 机制</strong>（JDBC、JNDI）：Bootstrap 加载的接口需要加载 classpath 上的实现，通过 <code>Thread.getContextClassLoader()</code> 向下委托。<strong>2. Tomcat</strong>：每个 WebApp 有独立类加载器，优先加载 WEB-INF/classes，实现应用隔离。<strong>3. OSGi/模块化</strong>：网状加载而非树形。<strong>4. 热部署</strong>：丢弃旧的 ClassLoader，用新的重新加载。打破方式：重写 <code>loadClass()</code> 而非 <code>findClass()</code>。</p>
             </div>
         </div>
+
+        <h4>面试追问链</h4>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>SPI破坏双亲委派的详细机制是什么？为什么需要Thread Context ClassLoader？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>核心矛盾：<code>java.sql.DriverManager</code>在rt.jar中由Bootstrap ClassLoader加载，但它需要加载classpath上的实现类（如com.mysql.cj.jdbc.Driver）。Bootstrap ClassLoader看不到子加载器的类（只能向上委托不能向下）。解决方案：<strong>Thread Context ClassLoader</strong>——线程创建时默认设置为AppClassLoader，Bootstrap加载的代码通过<code>Thread.currentThread().getContextClassLoader()</code>获取到AppClassLoader，用它来加载SPI实现类。本质是用线程作为桥梁，让高层代码能用低层类加载器加载类，打破了"只能向上委托"的约束。</p>
+            </div>
+        </div>
+
+        <pre data-lang="java"><code>// DriverManager的静态初始化块中：
+private static void loadInitialDrivers() {
+    // 使用ServiceLoader加载所有Driver实现
+    ServiceLoader&lt;Driver&gt; loadedDrivers = ServiceLoader.load(Driver.class);
+    // ServiceLoader.load内部：
+    // ClassLoader cl = Thread.currentThread().getContextClassLoader();
+    // return ServiceLoader.load(service, cl);
+    // 关键！用的是线程上下文类加载器，而不是当前类的加载器(Bootstrap)
+}</code></pre>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>ServiceLoader的工作原理？META-INF/services是什么？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>SPI约定：在<code>META-INF/services/</code>目录下创建以接口全限定名命名的文件，文件内容是实现类的全限定名（每行一个）。例如mysql-connector-java.jar中有<code>META-INF/services/java.sql.Driver</code>文件，内容为<code>com.mysql.cj.jdbc.Driver</code>。ServiceLoader内部：读取文件→逐行读取实现类名→用contextClassLoader加载类→反射创建实例。常见SPI：java.sql.Driver、java.nio.charset.spi.CharsetProvider、org.slf4j.spi.SLF4JServiceProvider。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>Tomcat是怎么打破双亲委派的？为什么要这样做？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>Tomcat的WebAppClassLoader打破了"先委派给父加载器"的规则，改为<strong>先自己加载</strong>（WEB-INF/classes和WEB-INF/lib），找不到再委派给父。原因：如果严格遵循双亲委派，App1用Spring 5.0，App2用Spring 4.0，同一个AppClassLoader只能加载一个版本，产生冲突。Tomcat方案：每个WebApp独立ClassLoader，优先加载自己的类→不同应用可以用同一库的不同版本→隔离成功。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>Dubbo SPI和Java SPI有什么区别？Spring Boot的auto-configuration和SPI的关系？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p><strong>Java SPI</strong>：一次性加载所有实现，配置在META-INF/services/接口名，每行一个实现类名。<strong>Dubbo SPI</strong>：配置在META-INF/dubbo/接口名，格式为key=value（如dubbo=xxx.DubboProtocol），支持<strong>按需加载</strong>（通过key获取指定实现）、@Adaptive运行时动态选择、Wrapper机制（类似AOP）、自动IOC注入。<strong>Spring Boot auto-configuration</strong>也是SPI思想：通过META-INF/spring.factories（2.x）或META-INF/spring/...imports（3.x）声明配置类，SpringFactoriesLoader扫描加载，再通过@ConditionalOnClass等条件注解决定是否生效——增加了条件化加载而非全量加载。</p>
+            </div>
+        </div>
+
+        <div class="callout warn"><p><strong>踩坑警告</strong>：不要说"SPI是Java的一个包/框架"——SPI是一种设计机制/规范，ServiceLoader是其实现工具。"Thread Context ClassLoader是特殊的ClassLoader"也是错的——它就是普通的AppClassLoader，只是存储在Thread对象中方便获取。"双亲委派是类加载器的继承关系"也是错的——是<strong>组合关系</strong>（parent字段），不是继承。</p></div>
+
+        <div class="callout tip"><p><strong>项目结合话术</strong>："在信贷系统中，我们的风控规则引擎基于SPI设计扩展点——定义了RiskRuleProvider接口，不同国家/地区的风控规则以SPI方式接入。新增国家风控规则只需新建jar包配置META-INF/services文件，不需要修改主工程代码。另外我们内部封装了common-starter，通过spring.factories自动配置链路追踪、统一异常处理、审计日志等横切关注点，各业务服务只需引入starter依赖。"</p></div>
+
     </div>
 
     <!-- 2.4 GC -->
@@ -1376,7 +1511,7 @@ GC 线程:    │①│  ②②②②②②②②②②②  │③③│  ④④
 
 <span class="cmt">// 硬伤2：浮动垃圾（Floating Garbage）</span>
 <span class="cmt">// → 并发清除阶段用户线程还在产生新垃圾，本次无法回收</span>
-<span class="cmt">// → 必须预留空间给用户线程（默认老年代 68% 就触发 CMS）</span>
+<span class="cmt">// → 必须预留空间给用户线程（默认老年代约 92% 触发（JDK 6+ 默认值，通过 CMSInitiatingOccupancyFraction 控制））</span>
 
 <span class="cmt">// 硬伤3：Concurrent Mode Failure</span>
 <span class="cmt">// → 如果 CMS 还没回收完，老年代就满了（预留空间不够）</span>
@@ -1847,6 +1982,67 @@ Object obj = field;  <span class="cmt">// 编译后实际执行：</span>
                 未来计划：升级 Java 21 后切换 Generational ZGC，目标 P99 延迟 &lt; 10ms。"</p>
             </div>
         </div>
+
+        <h4>面试追问链</h4>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>GC Root具体有哪些？能不能完整列出来？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>GC Root必须是"当前一定存活"的对象，共6类：①<strong>虚拟机栈中局部变量表引用的对象</strong>（方法正在执行，局部变量指向的对象一定在用）②<strong>方法区中静态属性引用的对象</strong>（类存活期间静态字段一直有效）③<strong>方法区中常量引用的对象</strong>（String常量池、final static字段）④<strong>JNI本地方法引用的对象</strong>（native方法持有的对象，JVM看不到native栈）⑤<strong>synchronized持有的对象</strong>（正在被同步的对象不能回收）⑥<strong>JVM内部引用</strong>（Class对象、ClassLoader、常驻异常对象如NPE单例等）。前4个必须秒答，第5/6个是加分项。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>G1的并发标记阶段详细流程是什么？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>G1并发标记分4步：①<strong>Initial Mark（STW，很短）</strong>：标记GC Root直接引用的对象，借助Young GC的STW完成（piggyback）②<strong>Concurrent Mark（与应用并发）</strong>：从GC Root遍历整个对象图，使用SATB(Snapshot-At-The-Beginning)算法 ③<strong>Remark（STW，较短）</strong>：处理SATB写屏障记录的引用变更，确保所有存活对象都被标记 ④<strong>Cleanup（部分STW）</strong>：统计每个Region的存活对象比例，按垃圾比例排序（Garbage First名字由来），回收完全空的Region，为Mixed GC做准备。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>G1如何实现可预测的停顿时间？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>通过四个机制：①<strong>Region化设计</strong>：堆被切分为约2048个Region，每次GC不需要回收整个堆 ②<strong>垃圾优先策略</strong>：Cleanup阶段统计每个Region的"垃圾占比"，Mixed GC优先选择垃圾最多的Region回收（性价比最高）③<strong>增量回收</strong>：根据历史GC数据预测每回收一个Region需要多少时间，在时间预算内选择尽可能多的Region ④<strong>自适应调节</strong>：G1根据实际停顿时间动态调整每次回收的Region数量。注意：MaxGCPauseMillis是<strong>目标</strong>不是<strong>保证</strong>，设太小可能导致回收赶不上分配最终触发Full GC。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>G1 vs CMS核心区别？为什么JDK9+默认G1？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>核心区别：①<strong>内存布局</strong>：CMS是连续的Young/Old区，G1是等大的Region灵活分配 ②<strong>回收算法</strong>：CMS老年代用标记-清除（有碎片），G1用标记-整理（Region间复制，无碎片）③<strong>停顿可预测</strong>：CMS不可控，G1通过MaxGCPauseMillis控制 ④<strong>大堆表现</strong>：CMS堆&gt;8G后并发标记时间过长，G1大堆更友好。JDK9默认G1的原因：CMS碎片问题长期运行越来越严重、G1在4G+堆上全面优于CMS、G1代码更可维护。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>什么是RSet（Remembered Set）？ZGC了解吗？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p><strong>RSet</strong>：每个Region维护一个RSet记录"谁引用了我这个Region内的对象"，作用是Young GC/Mixed GC时不需要扫描整个Old区来找跨Region引用，直接查RSet即可。通过写屏障（Write Barrier）在引用变更时维护RSet。<strong>ZGC</strong>（JDK15+正式可用）：目标停顿时间&lt;1ms且不随堆大小变化，核心技术是着色指针（Colored Pointers）+读屏障（Load Barrier），几乎全并发（标记、转移、重映射都并发），支持TB级堆。JDK21中已production-ready，适合超大堆+低延迟场景。</p>
+            </div>
+        </div>
+
+        <div class="callout warn"><p><strong>踩坑警告</strong>：不要说"G1是并发收集器不会STW"——Young GC和Mixed GC都是STW的！不要说"G1没有Full GC"——有！JDK 9 及之前是单线程的，JDK 10（JEP 307）改为多线程并行。但即使并行，Full GC 仍然是 STW 且耗时很长，必须尽量避免。"G1保证停顿时间在200ms内"也是错的——那是目标不是保证。GC Root必须能一口气说出至少5个。</p></div>
+
+        <div class="callout tip"><p><strong>项目结合话术</strong>："我们信贷系统用JDK17默认G1收集器。上线初期遇到Mixed GC频率过高，P99延迟间歇性飙升到500ms。排查发现InitiatingHeapOccupancyPercent默认45%触发太早——系统有大量短生命周期的授信计算对象，Young GC就能回收大部分。我们把IHOP调到60%后Mixed GC频率降了70%，P99稳定在100ms以内。同时设置MaxGCPauseMillis=100ms确保满足信贷系统SLA要求。"</p></div>
 
     </div>
 
@@ -2533,6 +2729,68 @@ linkedHashMap.entrySet().iterator().next();  <span class="cmt">// LinkedHashMap 
                 <p>不能！volatile int[] arr = new int[10]; 只保证arr这个引用本身的可见性（对arr的读写是volatile的），但arr[0]、arr[1]等元素的读写不是volatile的。要保证元素可见性需要：①AtomicIntegerArray（每个元素通过Unsafe做volatile读写）②每次修改元素后对arr做一次volatile写（比如arr=arr自赋值，trick）③用VarHandle对数组元素做volatile访问（Java 9+：VarHandle.getVolatile/setVolatile）。类似地，volatile修饰对象引用只保证引用本身可见，不保证对象内部字段的可见性。</p>
             </div>
         </div>
+
+        <h4>面试追问链</h4>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>为什么volatile不保证原子性？i++为什么不安全？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>volatile只能保证单次读和单次写的可见性，但不能保证"读-改-写"这个复合操作的原子性。i++实际是三步：①读取i的值到工作内存 ②执行+1运算 ③将结果写回主内存。并发场景下：线程A读取i=0，线程B也读取i=0（此时最新值就是0），线程A计算后写回i=1，线程B也计算后写回i=1——最终i=1而不是2。要保证原子性需要用<code>AtomicInteger</code>（CAS实现）或<code>synchronized</code>。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>四种内存屏障是什么？volatile读写分别插入了什么屏障？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p><strong>LoadLoad</strong>：确保屏障前的Load在屏障后的Load之前完成。<strong>StoreStore</strong>：确保屏障前的Store在屏障后的Store之前完成。<strong>LoadStore</strong>：确保屏障前的Load在屏障后的Store之前完成。<strong>StoreLoad</strong>：确保屏障前的Store在屏障后的Load之前完成（开销最大）。volatile写前插StoreStore（保证之前的写都已刷新到主存）、写后插StoreLoad（保证volatile写对后续volatile读可见）；volatile读后插LoadLoad+LoadStore（保证后续读写不重排到volatile读之前）。</p>
+            </div>
+        </div>
+
+        <pre data-lang="java"><code>// volatile 写操作 前后的屏障：
+// 普通读/写操作
+// [StoreStore屏障]  &lt;- 确保volatile写之前的所有写操作都已刷新到主存
+// volatile写操作
+// [StoreLoad屏障]   &lt;- 确保volatile写对后续的volatile读/写可见
+
+// volatile 读操作 后面的屏障：
+// volatile读操作
+// [LoadLoad屏障]    &lt;- 确保volatile读之后的所有读操作不会重排到前面
+// [LoadStore屏障]   &lt;- 确保volatile读之后的所有写操作不会重排到前面</code></pre>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>MESI缓存一致性协议是怎么工作的？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>MESI是CPU多核缓存一致性协议，每个缓存行有4种状态：<strong>M</strong>odified（被修改，只在当前CPU，和主存不一致）、<strong>E</strong>xclusive（独占，只在当前CPU，和主存一致）、<strong>S</strong>hared（共享，多个CPU缓存，和主存一致）、<strong>I</strong>nvalid（无效，已过期）。volatile写的过程：当前CPU修改缓存行状态变为M，通过总线嗅探（Bus Snooping）通知其他CPU，其他CPU将该缓存行标记为I（Invalid），下次读取时从主存重新加载。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>volatile和synchronized在可见性上的区别？什么时候用volatile？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>两者都保证可见性，但synchronized还保证原子性。volatile无上下文切换开销，性能更高。生产环境使用volatile的场景：①状态标志（<code>volatile boolean running = true</code>控制线程停止）②DCL单例防止指令重排 ③轻量级发布（一个线程写完对象所有字段后通过volatile引用发布给其他线程）。核心原则：volatile适合"一写多读"的简单标志位场景。</p>
+            </div>
+        </div>
+
+        <div class="callout warn"><p><strong>踩坑警告</strong>：不要说"volatile保证线程安全"——volatile只保证可见性和有序性，不保证原子性。注意区分：happens-before是JMM层面的抽象规则，内存屏障是硬件层面的具体实现。面试时先说JMM语义，再说硬件实现。</p></div>
+
+        <div class="callout tip"><p><strong>项目结合话术</strong>："在信贷系统的异步任务调度中，我们用volatile变量作为优雅停机标志。收到SIGTERM信号时设置volatile标志为true，所有工作线程在循环中检测到标志后完成当前任务再退出，避免放款流程被打断导致资金异常。另外在本地缓存刷新机制中，用volatile引用发布新缓存——写线程构建好完整的缓存对象后通过volatile引用一次性发布给读线程。"</p></div>
+
     </div>
 
     <!-- 3.4 CAS -->
@@ -2962,6 +3220,88 @@ counter.sum();             <span class="cmt">// 读取时遍历 base + cells[] �
                 <p>①Executors.newFixedThreadPool/newCachedThreadPool的坑：Fixed用LinkedBlockingQueue（无界→OOM），Cached用SynchronousQueue+maxPoolSize=Integer.MAX_VALUE（→创建过多线程OOM）。阿里规范要求手动创建ThreadPoolExecutor。②submit() vs execute()：submit会吞掉异常（包装在Future中），不get()永远不知道任务失败了→要么用execute+UncaughtExceptionHandler，要么submit后必须get()检查 ③线程池关闭：shutdown()等待已提交任务完成，shutdownNow()尝试中断正在执行的+返回未执行的。必须设置合理的awaitTermination超时 ④ThreadLocal泄漏：线程复用时ThreadLocal不会自动清理，任务结束后必须手动remove() ⑤线程名没设置：排查问题时pool-1-thread-1毫无意义→自定义ThreadFactory设置有意义的名字。</p>
             </div>
         </div>
+
+        <h4>面试追问链</h4>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>线程池中的任务抛异常了会怎样？execute()和submit()有什么区别？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p><strong>execute()提交的任务</strong>：异常从run()抛出→触发UncaughtExceptionHandler→该线程死亡→线程池创建新线程补位维持核心线程数。<strong>submit()提交的任务</strong>：FutureTask.run()内部catch了所有Throwable，异常存储在outcome字段，线程不会死亡，异常只有在调用future.get()时才以ExecutionException形式抛出。不调get()异常就被静默吞掉了。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>线程因异常死亡后线程池如何保持线程数？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>ThreadPoolExecutor的runWorker()方法中，如果任务抛异常，异常会向上传播导致Worker线程退出，进入processWorkerExit()方法。该方法会：①移除死亡的Worker ②判断当前线程数是否小于需要维持的线程数（corePoolSize），如果不够就调用addWorker(null, true)创建新线程补位。所以每次异常都要销毁+创建线程，有性能开销。如果任务频繁异常，会导致线程频繁创建销毁，性能严重下降。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>生产环境处理线程池异常的最佳实践是什么？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>分层防御：①<strong>任务层</strong>（首选）：所有任务内部try-catch所有异常并记录日志+报警 ②<strong>线程池层</strong>：自定义ThreadFactory设置UncaughtExceptionHandler作为兜底 ③<strong>钩子方法</strong>：重写afterExecute()提取submit任务的异常（通过Future.get()）④关键任务使用submit()+get(timeout)同步等待，超时或异常触发补偿机制。</p>
+            </div>
+        </div>
+
+        <pre data-lang="java"><code>// 方案1（首选）：任务内部try-catch
+executor.execute(() -&gt; {
+    try {
+        riskyOperation();
+    } catch (Exception e) {
+        log.error("任务执行异常", e);
+        alertService.notify("task-failed", e);
+    }
+});
+
+// 方案2：自定义ThreadFactory设置UncaughtExceptionHandler
+ThreadFactory factory = r -&gt; {
+    Thread t = new Thread(r);
+    t.setUncaughtExceptionHandler((thread, ex) -&gt; {
+        log.error("线程{}未捕获异常", thread.getName(), ex);
+    });
+    return t;
+};
+
+// 方案3：重写afterExecute钩子
+ThreadPoolExecutor executor = new ThreadPoolExecutor(...) {
+    @Override
+    protected void afterExecute(Runnable r, Throwable t) {
+        if (t == null &amp;&amp; r instanceof Future&lt;?&gt;) {
+            try { ((Future&lt;?&gt;) r).get(); }
+            catch (ExecutionException e) { t = e.getCause(); }
+        }
+        if (t != null) log.error("线程池任务异常", t);
+    }
+};</code></pre>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>核心线程和非核心线程死亡有区别吗？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>从ThreadPoolExecutor的实现来看，核心线程和非核心线程本质上没有区别——它们都是Worker对象，线程池并不标记哪个是"核心"哪个是"非核心"。区别只在于回收策略：当线程数&gt;corePoolSize时，空闲超过keepAliveTime的线程被回收；当线程数&lt;=corePoolSize时默认不回收。当任何线程因异常死亡时，只要当前总数低于corePoolSize就会补一个新的。</p>
+            </div>
+        </div>
+
+        <div class="callout warn"><p><strong>踩坑警告</strong>：submit()后异常不会消失——只是被延迟到get()时才抛出，不get就真的丢了。线程死亡后线程池会创建新线程，如果任务频繁异常会导致线程频繁创建销毁。另外注意Spring @Async默认使用SimpleAsyncTaskExecutor（每次创建新线程），生产必须自定义AsyncConfigurer。</p></div>
+
+        <div class="callout tip"><p><strong>项目结合话术</strong>："我们信贷系统的放款流程有异步通知下游的环节。初期用executor.execute()直接提交，上线后发现偶尔通知丢失。排查发现是任务抛了NPE，线程死亡，日志被淹没。修复方案：所有异步任务统一封装SafeRunnable（内部try-catch一切异常并报警），关键通知改用submit()+get(3s)同步等待，失败写入MQ异步重试，afterExecute中上报异常metrics配合Grafana告警。上线后再没出现通知丢失。"</p></div>
+
     </div>
 
     <!-- 3.7 ConcurrentHashMap -->
@@ -3065,6 +3405,77 @@ counter.sum();             <span class="cmt">// 读取时遍历 base + cells[] �
                 <p>Java 8的ConcurrentHashMap扩容时，不是一个线程独占完成，而是多个线程协助搬迁（helpTransfer）：①触发扩容的线程创建新数组（2倍大小），设置transferIndex ②其他线程在put时如果发现正在扩容（桶头节点是ForwardingNode），会加入搬迁 ③每个线程领取一段连续的桶（默认stride=16）进行搬迁 ④搬迁完的桶放置ForwardingNode标记（读操作通过它转发到新数组）。好处：避免单线程扩容时的长时间阻塞（百万级桶搬迁可能耗时很久），多线程协助让扩容代价分摊。实际优化：高低位分离避免重新hash（和HashMap一样利用新bit判断位置）。</p>
             </div>
         </div>
+
+        <h4>面试追问链</h4>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>ConcurrentHashMap 1.8的put流程具体是怎样的？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>①key和value都不允许为null（与HashMap不同）②计算hash，高位扰动spread ③如果table未初始化→initTable()（CAS竞争sizeCtl）④如果目标桶为空→<strong>CAS直接放入</strong>（无锁操作）⑤如果正在扩容（MOVED标记）→helpTransfer协助扩容 ⑥桶非空→<strong>synchronized锁住头节点</strong>，然后链表尾插或红黑树操作 ⑦addCount更新计数，检查是否需要扩容。关键点：CAS用于无竞争场景（空桶），synchronized用于有竞争场景（非空桶）。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>1.8为什么用synchronized而不是ReentrantLock？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>三个原因：①JVM对synchronized持续优化——从JDK6开始引入偏向锁→轻量级锁→重量级锁的锁升级机制，大部分情况下桶竞争不激烈，synchronized处于轻量级锁状态，性能接近无锁。②锁消除和锁粗化：JIT编译器可以对synchronized做逃逸分析，ReentrantLock是API层面的锁，JVM无法做这些优化。③内存开销更小：synchronized锁信息存储在对象头Mark Word中（2个机器字），不需要额外的Lock对象；ReentrantLock需要独立AQS对象。锁粒度已经细到单个桶了，竞争概率低，synchronized的自适应能力更好。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>size()在1.8中是怎么实现的？为什么说类似LongAdder？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>计数机制维护一个baseCount和CounterCell[]数组。先尝试CAS累加baseCount，无竞争直接成功；如果CAS失败（竞争激烈），把增量分散到CounterCell数组的不同slot。size()时把baseCount+所有CounterCell的值求和。这和LongAdder的设计思想完全一样——<strong>用空间换时间，分散热点</strong>。注意：size()返回的是近似值，因为计算过程没有全局锁，可能有其他线程正在修改。</p>
+            </div>
+        </div>
+
+        <pre data-lang="java"><code>// ConcurrentHashMap 1.8 计数机制
+private transient volatile long baseCount;           // 无竞争时CAS累加到这里
+private transient volatile CounterCell[] counterCells; // 竞争时分散到cell数组
+
+// size()方法
+public int size() {
+    long n = sumCount();
+    return ((n &lt; 0L) ? 0 : (n &gt;= Integer.MAX_VALUE) ? Integer.MAX_VALUE : (int)n);
+}
+
+final long sumCount() {
+    CounterCell[] cs = counterCells;
+    long sum = baseCount;
+    if (cs != null) {
+        for (CounterCell c : cs)
+            if (c != null) sum += c.value;
+    }
+    return sum;
+}</code></pre>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>树化阈值为什么是8？退化为什么是6？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>链表长度达到8时转红黑树（前提：数组长度&gt;=64，否则先扩容），红黑树节点降到6时退化为链表。为什么是8：根据泊松分布，hash分布良好时桶中达到8个节点的概率约为千万分之一（0.00000006），选8是在时间和空间之间的平衡。为什么退化阈值是6而不是8：避免频繁树化/退化的抖动（hysteresis），如果都是8则刚好在临界点反复转换浪费性能。</p>
+            </div>
+        </div>
+
+        <div class="callout warn"><p><strong>踩坑警告</strong>：不要说"1.8用CAS替代了锁"——CAS只用于空桶，非空桶仍然用synchronized。也不要说"Segment在1.8中被弱化了"——1.8完全没有Segment（序列化兼容除外）。1.8的并发度=桶的数量，不再是固定16。size()是最终一致的，不是实时精确的。</p></div>
+
+        <div class="callout tip"><p><strong>项目结合话术</strong>："在信贷系统中，我们用ConcurrentHashMap做本地缓存——缓存授信规则的计算结果（30秒TTL）。选择CHM而不是Guava Cache的原因是读多写少、数据量可控，不需要LRU淘汰策略，CHM的读操作完全无锁（volatile read）性能更好。同时理解size()是近似值，所以监控缓存命中率用的是自己维护的AtomicLong计数器。"</p></div>
+
     </div>
 
     <!-- Content will be added incrementally -->
@@ -3230,7 +3641,7 @@ Thread.startVirtualThread(() -&gt; doWork());</code></pre>
             </div>
             <div class="qa-answer">
                 <span class="qa-badge qa-badge-a">A</span>
-                <p>Pinning是虚拟线程无法从载体线程unmount的情况——即使遇到阻塞操作也会连同载体线程一起阻塞。原因：①synchronized代码块内阻塞（Monitor机制依赖OS线程身份，unmount后Monitor关联的线程ID会变，无法正确释放锁）②JNI native方法调用中。危害：载体线程被固定意味着少了一个工作线程，大量pinning会耗尽载体线程池导致吞吐量骤降。解决：①将synchronized替换为ReentrantLock（Lock的park/unpark已适配虚拟线程调度）②减少在synchronized中的阻塞操作 ③-Djdk.tracePinnedThreads=short诊断pinning。JDK未来版本可能解决synchronized的pinning问题（Project Loom路线图中）。</p>
+                <p>Pinning是虚拟线程无法从载体线程unmount的情况——即使遇到阻塞操作也会连同载体线程一起阻塞。原因：①synchronized代码块内阻塞（Monitor机制依赖OS线程身份，unmount后Monitor关联的线程ID会变，无法正确释放锁）②JNI native方法调用中。危害：载体线程被固定意味着少了一个工作线程，大量pinning会耗尽载体线程池导致吞吐量骤降。解决：①将synchronized替换为ReentrantLock（Lock的park/unpark已适配虚拟线程调度）②减少在synchronized中的阻塞操作 ③-Djdk.tracePinnedThreads=short诊断pinning。JDK 24（JEP 491）已解决 synchronized 的 pinning 问题，虚拟线程在 synchronized 块中不再被固定到载体线程。</p>
             </div>
         </div>
 
@@ -3578,6 +3989,68 @@ pool.submit(() -&gt; {
             <div class="callout-title">Doug Lea 视角</div>
             <p>ThreadLocal 本质上是一种"空间换并发"的设计——通过让每个线程持有独立副本来避免同步开销。它的哈希表使用开放地址法而非链表法（我的 ConcurrentHashMap 用的是链表/红黑树），因为 ThreadLocal 数量通常很少（几个到几十个），开放地址法在低负载时缓存更友好。但这个设计在虚拟线程百万级并发场景下暴露了可扩展性的局限——这正是我参与推动 ScopedValue 设计的原因之一。</p>
         </div>
+
+        <h4>面试追问链</h4>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>为什么key要设计成弱引用？如果是强引用会怎样？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>如果key是强引用：外部代码把ThreadLocal变量置为null后，ThreadLocalMap中的Entry仍然强引用着ThreadLocal对象，导致它永远不会被GC——ThreadLocal本身和value都泄漏。设计成弱引用后：外部没有强引用时GC能回收ThreadLocal对象，key变成null，ThreadLocalMap在后续get/set操作中探测null key的Entry并清理value。但这是惰性清理，不可靠，所以<strong>必须手动remove()</strong>。弱引用是折中方案——让ThreadLocal对象本身可被GC，同时通过探测null key触发value清理。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>ThreadLocalMap的hash冲突是怎么解决的？为什么不用链表法？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>ThreadLocalMap使用<strong>线性探测法（Linear Probing）</strong>，不是HashMap那样的链地址法。原因：①ThreadLocalMap的元素数量通常很少（一个线程不会有几百个ThreadLocal），线性探测够用 ②线性探测对CPU缓存友好（连续内存访问）③不需要额外的Node对象，内存紧凑 ④ThreadLocal的hashCode使用0x61c88647（黄金分割数）递增，天然散列均匀，冲突率极低。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>expungeStaleEntry的清理机制是怎样的？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p>当发现key=null的Entry时触发清理：①清除当前过期Entry（断开value的强引用，设为null）②继续向后线性探测直到遇到空位，途中遇到的过期Entry一并清除，非过期Entry做rehash修复探测链。触发时机：get()、set()、remove()操作中都会顺便清理遇到的过期Entry——这是<strong>惰性清理</strong>策略。但如果某个ThreadLocal一直不被访问，对应的过期Entry可能一直不被清理，所以还是必须手动remove()。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>InheritableThreadLocal和TransmittableThreadLocal的区别？线程池场景怎么办？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p><strong>InheritableThreadLocal</strong>：父线程创建子线程时复制ThreadLocal值，但<strong>线程池场景失效</strong>（线程池的线程在池创建时就已存在，不是每次提交任务时新建）。<strong>TransmittableThreadLocal</strong>（阿里开源TTL）：在任务提交时capture当前线程所有TTL值快照，任务执行时replay到执行线程，执行完restore回去。使用方式：①包装线程池 TtlExecutors.getTtlExecutorService() ②Java Agent无侵入增强（生产推荐）。</p>
+            </div>
+        </div>
+
+        <div class="qa">
+            <div class="qa-question">
+                <span class="qa-badge qa-badge-q">Q</span>
+                <p>四种引用类型分别是什么？应用场景？</p>
+            </div>
+            <div class="qa-answer">
+                <span class="qa-badge qa-badge-a">A</span>
+                <p><strong>强引用</strong>：永远不会被GC（Object obj = new Object()）。<strong>软引用(SoftReference)</strong>：内存不足时才GC（用于内存敏感的缓存如图片缓存）。<strong>弱引用(WeakReference)</strong>：下次GC就回收，不管内存够不够（ThreadLocalMap的key、WeakHashMap）。<strong>虚引用(PhantomReference)</strong>：随时回收，get()永远返回null（跟踪对象被GC时机，如DirectByteBuffer的Cleaner）。记忆口诀：强软弱虚，从不回收→内存不足→GC就回收→形同虚设。</p>
+            </div>
+        </div>
+
+        <div class="callout warn"><p><strong>踩坑警告</strong>：ThreadLocalMap的key是<strong>弱引用(WeakReference)</strong>而不是虚引用(PhantomReference)！弱引用是GC就回收，软引用是内存不足时回收——不要搞反。另外，ThreadLocal的内存泄漏是value泄漏（不是ThreadLocal对象本身），remove()是为了回收Entry中的value。ThreadLocalMap用的是开放地址法（线性探测），不是链表法。</p></div>
+
+        <div class="callout tip"><p><strong>项目结合话术</strong>："在信贷系统中，ThreadLocal存放当前请求的用户上下文（userId、tenantId、traceId）。上线初期有一次生产事故：线程池复用导致上一个请求的userId残留，下一个请求读到错误用户身份，差点出现越权问题。后来在Interceptor的afterCompletion中统一调用remove()，并引入TTL（TransmittableThreadLocal）处理异步任务中的链路追踪ID传递。"</p></div>
+
     </div>
 </section>
 <!-- ============================================================ -->

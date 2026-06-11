@@ -1,0 +1,1022 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Spring·网络·系统设计 · 面试深度指南</title>
+<link rel="stylesheet" href="./shared/style.css">
+</head>
+<body>
+<div class="reading-progress"></div>
+<button class="theme-toggle" aria-label="切换主题">&#9788;</button>
+<button class="mobile-menu-btn" aria-label="菜单">&#9776;</button>
+<div class="font-size-control">
+  <button class="font-size-btn" data-action="smaller" aria-label="缩小字号">A-</button>
+  <button class="font-size-btn" data-action="larger" aria-label="放大字号">A+</button>
+</div>
+<div class="sidebar-overlay"></div>
+
+<div class="page-wrapper">
+
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">Spring · 网络 · <span class="accent">系统设计</span></div>
+    <div class="sidebar-subtitle">面试深度指南 · 架构师视角</div>
+  </div>
+  <nav class="sidebar-nav">
+    <a href="./index.html" class="nav-home-link">&#8962; 返回主页</a>
+    <div class="nav-group">
+      <a href="#spring" class="nav-group-title">一、Spring / Spring Boot</a>
+      <div class="nav-items">
+        <a href="#spring-ioc">IoC 容器与 Bean 生命周期</a>
+        <a href="#spring-aop">AOP 原理</a>
+        <a href="#spring-tx">事务管理</a>
+        <a href="#spring-boot">Spring Boot 自动装配</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#network" class="nav-group-title">二、网络</a>
+      <div class="nav-items">
+        <a href="#tcp">TCP 三次握手与四次挥手</a>
+        <a href="#http">HTTP / HTTPS</a>
+        <a href="#tcp-sticky">TCP 粘包拆包</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <a href="#system-design" class="nav-group-title">三、系统设计</a>
+      <div class="nav-items">
+        <a href="#rate-limit">限流设计</a>
+        <a href="#distributed-id">分布式 ID</a>
+        <a href="#seckill">秒杀系统</a>
+      </div>
+    </div>
+  </nav>
+</aside>
+
+<main class="main-content">
+<div class="page-hero">
+  <h1>Spring · 网络 · 系统设计</h1>
+  <p class="subtitle">后端面试三大高频模块 · 面试追问链式深度覆盖</p>
+  <p class="author">— 8年后端视角，信贷/金融系统实战经验</p>
+</div>
+
+<!-- ============================================================ -->
+<!-- Part 1: Spring / Spring Boot -->
+<!-- ============================================================ -->
+
+<section id="spring">
+<h2>一、Spring / Spring Boot</h2>
+
+<div id="spring-ioc">
+<h3>1.1 IoC 容器与 Bean 生命周期</h3>
+
+<h4>30秒标准答案</h4>
+<p>Spring IoC（Inversion of Control）的核心思想是<strong>控制反转</strong>——把对象的创建和依赖关系管理从代码中转移到容器。开发者只需声明依赖（@Autowired / 构造器参数），容器负责注入正确的实例。这降低了耦合度，提高了可测试性。</p>
+
+<h4>Bean 完整生命周期</h4>
+
+<pre data-lang="text"><code>实例化 (Instantiation)
+    ↓
+属性填充 (Populate Properties / 依赖注入)
+    ↓
+Aware 接口回调 (BeanNameAware → BeanFactoryAware → ApplicationContextAware)
+    ↓
+BeanPostProcessor#postProcessBeforeInitialization
+    ↓
+InitializingBean#afterPropertiesSet / @PostConstruct / init-method
+    ↓
+BeanPostProcessor#postProcessAfterInitialization  ← AOP代理在这里生成
+    ↓
+Bean 就绪，放入容器供使用
+    ↓
+DisposableBean#destroy / @PreDestroy / destroy-method</code></pre>
+
+<div class="callout tip">
+<p><strong>面试关键点</strong>：AOP代理（@Transactional、@Async等）是在 BeanPostProcessor 的<strong>后置处理</strong>阶段生成的。这解释了为什么自调用不经过代理——因为目标对象持有的 this 是原始对象，不是代理对象。</p>
+</div>
+
+<h4>三级缓存解决循环依赖</h4>
+
+<pre data-lang="java"><code>// Spring 三级缓存（DefaultSingletonBeanRegistry）
+/** 一级缓存：完整的 Bean 实例（已完成属性注入和初始化） */
+Map&lt;String, Object&gt; singletonObjects = new ConcurrentHashMap&lt;&gt;();
+
+/** 二级缓存：早期暴露的 Bean（已实例化但未完成属性注入） */
+Map&lt;String, Object&gt; earlySingletonObjects = new ConcurrentHashMap&lt;&gt;();
+
+/** 三级缓存：Bean 工厂（用于生成早期引用，可能是代理对象） */
+Map&lt;String, ObjectFactory&lt;?&gt;&gt; singletonFactories = new HashMap&lt;&gt;();</code></pre>
+
+<p><strong>循环依赖解决过程</strong>（A 依赖 B，B 依赖 A）：</p>
+<ol>
+  <li>创建 A：实例化 A → 将 A 的 ObjectFactory 放入<strong>三级缓存</strong></li>
+  <li>填充 A 的属性：发现依赖 B → 去创建 B</li>
+  <li>创建 B：实例化 B → 将 B 的 ObjectFactory 放入三级缓存</li>
+  <li>填充 B 的属性：发现依赖 A → 从三级缓存获取 A 的 ObjectFactory</li>
+  <li>调用 ObjectFactory.getObject()：如果 A 需要代理则返回代理对象，否则返回原始对象</li>
+  <li>将 A 的早期引用放入<strong>二级缓存</strong>，删除三级缓存中的 A</li>
+  <li>B 获得 A 的引用 → B 创建完成 → 放入一级缓存</li>
+  <li>回到 A：获得 B 的引用 → A 创建完成 → 放入一级缓存</li>
+</ol>
+
+<h4>面试追问链</h4>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>为什么需要三级缓存？两级不行吗？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>如果没有 AOP，两级缓存确实够了（一级存完整 Bean，二级存早期引用）。但有 AOP 时，代理对象应该在 BeanPostProcessor 后置阶段创建——这是 Spring 的设计原则。三级缓存存的是 ObjectFactory（工厂），只在其他 Bean 因循环依赖真正需要早期引用时才调用工厂方法决定返回原始对象还是代理对象。如果去掉三级缓存在二级直接存早期引用，就必须在实例化后立即为所有 Bean 创建代理——这破坏了 Spring 的生命周期设计（代理创建应该延迟到 postProcessAfterInitialization 阶段）。三级缓存的 ObjectFactory 实现了『按需创建、延迟到最晚时刻』的设计目标。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>构造器注入能解决循环依赖吗？为什么 Spring 推荐构造器注入？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p><strong>构造器注入无法解决循环依赖</strong>——因为 A 的构造器需要 B，B 的构造器需要 A，两个都无法完成实例化（连放入三级缓存的机会都没有）。Spring 会直接抛 BeanCurrentlyInCreationException。<br><br>
+    但 Spring 仍然推荐构造器注入，原因：<br>
+    1. <strong>不可变性</strong>：依赖声明为 final，创建后不可修改<br>
+    2. <strong>强制依赖完整</strong>：构造时就保证所有必须的依赖都已注入，不会出现 NPE<br>
+    3. <strong>暴露设计问题</strong>：如果构造器参数过多，说明类的职责太重，需要拆分<br>
+    4. <strong>循环依赖是设计缺陷</strong>：用 @Lazy 或重构来解决，而不是纵容循环依赖</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>@Lazy 是怎么打破循环依赖的？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>@Lazy 注入的不是真正的 Bean，而是一个<strong>代理对象</strong>。构造器参数是代理，所以构造可以正常完成。只有在第一次调用代理方法时，才会从容器中获取真正的 Bean（此时对方已经创建好了）。本质上是把"创建时依赖"变成了"使用时依赖"。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>Spring Boot 3.x 对循环依赖的态度有什么变化？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>Spring Boot 2.6+ <strong>默认禁止循环依赖</strong>（spring.main.allow-circular-references=false）。官方认为循环依赖是设计缺陷，应该通过重构解决。如果确实需要，可以手动开启配置或用 @Lazy 打破。我们信贷系统升级 Boot 3.x 时就遇到了这个问题——有两个 Service 互相依赖，最终重构为引入一个中间的 Mediator 类来解耦。</p>
+  </div>
+</div>
+
+<div class="callout warn">
+<p><strong>踩坑警告</strong>：<br>
+1. prototype 作用域的 Bean <strong>不会被三级缓存处理</strong>，循环依赖直接报错<br>
+2. @Async 标注的 Bean 如果存在循环依赖会出问题——因为 @Async 的代理是在 BeanPostProcessor 后置阶段创建的，和循环依赖的早期暴露时机冲突<br>
+3. 面试不要说"Spring 通过提前暴露对象解决循环依赖"就完事了——要说出三级缓存的名字和各自作用</p>
+</div>
+
+<div class="callout tip">
+<p><strong>项目结合话术</strong>：「在我们信贷系统升级 Spring Boot 3.2 时，启动直接报循环依赖错误。排查发现是 CreditService 和 RiskService 互相引用。我们的方案是引入一个 CreditRiskMediator，把两者之间的交互逻辑收敛到中间层，同时用事件驱动（ApplicationEvent）替代部分直接调用，彻底消除了循环依赖。」</p>
+</div>
+</div>
+
+<div id="spring-aop">
+<h3>1.2 AOP 原理</h3>
+
+<h4>30秒标准答案</h4>
+<p>Spring AOP 基于<strong>动态代理</strong>实现，有两种方式：目标类实现了接口时用 JDK 动态代理（基于 Proxy.newProxyInstance），没有接口时用 CGLIB（基于字节码生成子类）。Spring Boot 2.x+ 默认全部使用 CGLIB，因为它不需要接口约束更灵活。AOP 代理在 BeanPostProcessor 后置处理阶段创建，这就是为什么<strong>自调用不走代理</strong>——方法内部用 this 调用另一个方法，this 指向的是原始对象而不是代理。</p>
+
+<h4>JDK 动态代理 vs CGLIB</h4>
+
+<table>
+  <thead><tr><th>维度</th><th>JDK 动态代理</th><th>CGLIB</th></tr></thead>
+  <tbody>
+    <tr><td>实现方式</td><td>实现接口，生成代理类</td><td>继承目标类，生成子类</td></tr>
+    <tr><td>限制</td><td>目标必须实现接口</td><td>不能代理 final 类/方法</td></tr>
+    <tr><td>性能</td><td>调用稍慢（反射）</td><td>调用快（方法直接调用）</td></tr>
+    <tr><td>创建速度</td><td>快</td><td>稍慢（需要生成字节码）</td></tr>
+    <tr><td>Spring Boot 默认</td><td>2.x 之前接口类用这个</td><td><strong>2.x+ 默认全部使用</strong></td></tr>
+  </tbody>
+</table>
+
+<h4>面试追问链</h4>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>@Transactional 自调用失效怎么解决？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>自调用失效的根因：类内部调用方法时用的是 this（原始对象），不经过代理，所以 @Transactional 的切面逻辑不会执行。<br><br>
+    解决方案有三种：<br>
+    1. <strong>注入自身</strong>：@Autowired private MyService self; 然后用 self.method() 调用<br>
+    2. <strong>AopContext</strong>：((MyService) AopContext.currentProxy()).method()（需开启 exposeProxy=true）<br>
+    3. <strong>重构</strong>：把需要事务的方法提取到另一个 Service 中（推荐，职责清晰）</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>Spring AOP 和 AspectJ 有什么区别？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p><strong>Spring AOP</strong>：运行时代理，只能拦截 Spring Bean 的方法调用，性能开销在运行时。<br>
+    <strong>AspectJ</strong>：编译时/加载时织入字节码，可以拦截任何类的任何连接点（包括字段访问、构造器），功能更强大但配置复杂。<br><br>
+    实际项目中 Spring AOP 覆盖 99% 的场景。只有在需要拦截非 Spring 管理的类、或需要极致性能（省去运行时代理开销）时才用 AspectJ。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>多个切面的执行顺序是什么？怎么控制？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>同一个切面内：Around → Before → 目标方法 → AfterReturning/AfterThrowing → After → Around返回<br><br>
+    多个切面之间：用 @Order(n) 控制，<strong>值越小优先级越高</strong>（越先进入，越后离开，类似洋葱模型）。<br><br>
+    例如 @Order(1) 的事务切面包在最外层，@Order(2) 的日志切面在里面：事务先开启 → 日志开始 → 执行 → 日志结束 → 事务提交。</p>
+  </div>
+</div>
+
+<div class="callout tip">
+<p><strong>项目结合话术</strong>：「我们信贷系统有三层 AOP 切面：最外层 @Order(1) 是分布式链路追踪（设置 traceId），第二层 @Order(2) 是统一异常处理和告警，第三层 @Order(3) 是业务审计日志。这个顺序保证了即使业务异常也能被正确追踪和告警。」</p>
+</div>
+</div>
+
+<div id="spring-tx">
+<h3>1.3 事务管理</h3>
+
+<h4>30秒标准答案</h4>
+<p>Spring 事务管理的核心是 @Transactional 注解（声明式事务），底层通过 AOP 代理 + PlatformTransactionManager 实现。最重要的两个配置是<strong>传播行为</strong>（Propagation）和<strong>回滚规则</strong>（rollbackFor）。</p>
+
+<h4>七种传播行为（重点三个）</h4>
+
+<table>
+  <thead><tr><th>传播行为</th><th>含义</th><th>使用场景</th></tr></thead>
+  <tbody>
+    <tr><td><strong>REQUIRED</strong>（默认）</td><td>有事务就加入，没有就新建</td><td>大部分业务方法</td></tr>
+    <tr><td><strong>REQUIRES_NEW</strong></td><td>无论如何都新建事务，挂起当前事务</td><td>独立不受外部回滚影响（如操作日志）</td></tr>
+    <tr><td><strong>NESTED</strong></td><td>有事务就嵌套（savepoint），没有就新建</td><td>子操作失败可回滚但不影响父</td></tr>
+    <tr><td>SUPPORTS</td><td>有事务就加入，没有就非事务执行</td><td>只读查询</td></tr>
+    <tr><td>NOT_SUPPORTED</td><td>非事务执行，挂起当前事务</td><td>不需要事务的操作</td></tr>
+    <tr><td>MANDATORY</td><td>必须在事务中，否则异常</td><td>强制调用方提供事务</td></tr>
+    <tr><td>NEVER</td><td>必须非事务，有事务则异常</td><td>极少使用</td></tr>
+  </tbody>
+</table>
+
+<h4>@Transactional 失效的 7 种场景</h4>
+<ol>
+  <li><strong>方法非 public</strong>：Spring AOP 代理只拦截 public 方法</li>
+  <li><strong>自调用</strong>：内部 this 调用不经过代理</li>
+  <li><strong>异常被 catch 吃掉</strong>：事务看不到异常，不会回滚</li>
+  <li><strong>抛出 checked 异常</strong>：默认只回滚 RuntimeException 和 Error，checked 异常需要配置 rollbackFor</li>
+  <li><strong>传播行为 NOT_SUPPORTED</strong>：以非事务方式运行</li>
+  <li><strong>多线程</strong>：新线程不在同一个事务上下文中（事务绑定在 ThreadLocal）</li>
+  <li><strong>数据库引擎不支持</strong>：MyISAM 不支持事务</li>
+</ol>
+
+<h4>面试追问链</h4>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>NESTED 和 REQUIRES_NEW 有什么区别？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>核心区别在于<strong>是否共享物理事务</strong>：<br><br>
+    <strong>REQUIRES_NEW</strong>：创建一个全新的、完全独立的事务。父事务回滚不影响子事务（子事务已提交就提交了）。子事务回滚也不影响父事务。<br><br>
+    <strong>NESTED</strong>：在同一个物理事务中通过 SAVEPOINT 创建嵌套事务。子事务回滚只回滚到 savepoint，不影响父事务。但<strong>父事务回滚会连带回滚子事务</strong>（因为是同一个物理事务）。<br><br>
+    选择：如果子操作必须独立于父操作的成败（如记录操作日志），用 REQUIRES_NEW。如果子操作失败可以忽略但父操作失败应该全部回滚，用 NESTED。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>你们信贷系统中事务是怎么设计的？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>我们的放款流程涉及多步操作：扣减额度、创建放款单、记录流水、发送通知。设计原则是：<br><br>
+    1. <strong>核心资金操作</strong>（扣额度+创建放款单）在同一个事务中，用默认 REQUIRED<br>
+    2. <strong>操作审计日志</strong>用 REQUIRES_NEW——即使放款失败回滚，审计日志必须保留<br>
+    3. <strong>发送通知</strong>放在事务提交后执行（@TransactionalEventListener(phase=AFTER_COMMIT)），避免事务回滚但通知已发出<br>
+    4. <strong>rollbackFor = Exception.class</strong>——我们强制配置回滚所有异常，金融系统宁可回滚也不能数据不一致</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>长事务有什么危害？怎么避免？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>长事务的危害：<br>
+    1. <strong>锁持有时间长</strong>：其他事务等待超时<br>
+    2. <strong>undo log 堆积</strong>：MVCC 需要保留长事务期间所有版本，undo log 不能被 purge<br>
+    3. <strong>连接池耗尽</strong>：事务不结束，数据库连接不释放<br>
+    4. <strong>主从延迟</strong>：大事务生成大量 binlog<br><br>
+    避免方式：<br>
+    - 事务中不要有 RPC 调用、MQ 发送等耗时操作<br>
+    - 查询操作放到事务外面（先查后写）<br>
+    - 编程式事务（TransactionTemplate）精确控制事务范围<br>
+    - 大批量操作分批提交</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>@Transactional 的 rollbackFor 默认值是什么？为什么需要改？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>默认只回滚 <strong>RuntimeException 和 Error</strong>，不回滚 checked exception（如 IOException、SQLException）。这是因为 Spring 沿用了 EJB 的语义。<br><br>
+    但在实际项目中这很危险——比如调用银行接口抛出 IOException，如果不回滚，额度已扣但放款没发出去，数据就不一致了。所以我们强制要求所有 @Transactional 都配置 <code>rollbackFor = Exception.class</code>，并通过 checkstyle 规则扫描。</p>
+  </div>
+</div>
+
+<div class="callout warn">
+<p><strong>踩坑警告</strong>：<br>
+1. <strong>最常见的坑</strong>：事务方法里 try-catch 了异常但没有重新抛出 → 事务不回滚 → 数据不一致<br>
+2. <strong>@Async + @Transactional 共存</strong>：@Async 会在新线程执行，事务上下文丢失。如果需要异步+事务，应该在异步方法内部自己开事务<br>
+3. <strong>@Transactional(readOnly=true)</strong>：不只是个标记——MySQL 对只读事务有优化：不分配事务 ID（trx_id），也不生成新的 undo log 条目（因为没有写操作）。但只读事务仍然使用已有的 undo log 进行 MVCC 一致性读。长时间的报表查询应该加这个</p>
+</div>
+</div>
+
+<div id="spring-boot">
+<h3>1.4 Spring Boot 自动装配</h3>
+
+<h4>30秒标准答案</h4>
+<p>Spring Boot 自动装配的核心流程：@SpringBootApplication 包含 @EnableAutoConfiguration → 触发 AutoConfigurationImportSelector → 扫描所有 jar 包的 <code>META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports</code> 文件（Boot 2.x 是 spring.factories）→ 读取到所有候选配置类 → 通过 @Conditional 系列注解过滤 → 满足条件的配置类生效并注册 Bean。</p>
+
+<h4>自动装配流程图</h4>
+<pre data-lang="text"><code>@SpringBootApplication
+  └── @EnableAutoConfiguration
+        └── @Import(AutoConfigurationImportSelector.class)
+              └── selectImports()
+                    └── 读取 META-INF/spring/...AutoConfiguration.imports
+                          └── 获得候选配置类列表（如 DataSourceAutoConfiguration）
+                                └── @ConditionalOnClass(DataSource.class) → 条件匹配？
+                                      ├── 是 → 注册配置类中定义的 Bean
+                                      └── 否 → 跳过</code></pre>
+
+<h4>常用 @Conditional 注解</h4>
+<table>
+  <thead><tr><th>注解</th><th>条件</th></tr></thead>
+  <tbody>
+    <tr><td>@ConditionalOnClass</td><td>classpath 中存在指定类</td></tr>
+    <tr><td>@ConditionalOnMissingBean</td><td>容器中没有指定 Bean（允许用户覆盖）</td></tr>
+    <tr><td>@ConditionalOnProperty</td><td>配置文件中有指定属性且值匹配</td></tr>
+    <tr><td>@ConditionalOnWebApplication</td><td>是 Web 应用</td></tr>
+  </tbody>
+</table>
+
+<h4>面试追问链</h4>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>如何自定义一个 Spring Boot Starter？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>步骤：<br>
+    1. 创建 <code>xxx-spring-boot-autoconfigure</code> 模块：编写 @Configuration 类 + @ConfigurationProperties<br>
+    2. 创建 <code>xxx-spring-boot-starter</code> 模块：只有 pom 依赖，引入 autoconfigure 模块<br>
+    3. 在 autoconfigure 模块的 <code>META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports</code> 中注册配置类<br>
+    4. 加 @ConditionalOnClass 等条件注解控制生效时机<br>
+    5. 用 @ConditionalOnMissingBean 允许用户自定义覆盖默认 Bean</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>@ConditionalOnMissingBean 的作用是什么？为什么需要它？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>它的作用是：只有当容器中<strong>不存在</strong>用户自定义的同类型 Bean 时，才注册自动配置的 Bean。这实现了"约定优于配置"的理念——Starter 提供默认实现，但用户可以通过自己定义 Bean 来覆盖。<br><br>
+    例如 DataSourceAutoConfiguration 中的数据源创建用了 @ConditionalOnMissingBean(DataSource.class)，如果你自己 @Bean 了一个 DataSource，自动配置就不生效。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>Spring Boot 2.x 和 3.x 的自动装配有什么变化？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>主要变化：<br>
+    1. <strong>注册文件路径变了</strong>：2.x 用 META-INF/spring.factories，3.x 用 META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports（每行一个类名）<br>
+    2. <strong>@AutoConfiguration 注解</strong>：3.x 新增，替代 @Configuration + @AutoConfigureAfter/Before<br>
+    3. <strong>Jakarta 命名空间</strong>：javax.* → jakarta.*（影响所有 Servlet/JPA/Validation 相关代码）<br>
+    4. <strong>GraalVM 原生编译支持</strong>：AOT（Ahead-Of-Time）编译，启动时间 &lt; 100ms</p>
+  </div>
+</div>
+
+<div class="callout tip">
+<p><strong>项目结合话术</strong>：「我们团队封装了一个 credit-common-spring-boot-starter，里面自动配置了：统一异常处理（@ControllerAdvice）、分布式链路追踪（TraceId 透传）、接口审计日志、Dubbo 消费者降级策略。各业务服务只需引入这个 starter 依赖，不需要重复配置。实现原理就是通过 AutoConfiguration.imports 注册多个配置类，配合 @ConditionalOnProperty 控制开关。」</p>
+</div>
+</div>
+
+</section>
+
+<!-- ============================================================ -->
+<!-- Part 2: Network -->
+<!-- ============================================================ -->
+
+<section id="network">
+<h2>二、网络</h2>
+
+<div id="tcp">
+<h3>2.1 TCP 三次握手与四次挥手</h3>
+
+<h4>三次握手</h4>
+<pre data-lang="text"><code>Client                           Server
+  │                                 │
+  │──── SYN (seq=x) ──────────────→│  第一次：客户端发起连接
+  │                                 │
+  │←─── SYN+ACK (seq=y, ack=x+1) ─│  第二次：服务端确认并发起
+  │                                 │
+  │──── ACK (ack=y+1) ────────────→│  第三次：客户端确认
+  │                                 │
+  │         连接建立 (ESTABLISHED)    │</code></pre>
+
+<p><strong>为什么三次，不能两次？</strong><br>
+防止<strong>已失效的连接请求</strong>到达服务器。假设客户端发了一个 SYN 包因网络延迟很久才到达服务器，此时客户端早已超时放弃。如果只有两次握手，服务器收到这个旧 SYN 就直接建立连接，白白浪费资源。三次握手让客户端有机会用第三次 ACK 告诉服务器"我确实想连接"。</p>
+
+<h4>四次挥手</h4>
+<pre data-lang="text"><code>Client                           Server
+  │                                 │
+  │──── FIN (seq=u) ──────────────→│  第一次：客户端请求关闭
+  │                                 │
+  │←─── ACK (ack=u+1) ────────────│  第二次：服务端确认（半关闭状态）
+  │                                 │  服务端可能还有数据要发...
+  │←─── FIN (seq=w) ──────────────│  第三次：服务端也关闭
+  │                                 │
+  │──── ACK (ack=w+1) ────────────→│  第四次：客户端确认
+  │                                 │
+  │     TIME_WAIT (2MSL)            │
+  │     然后真正关闭                  │</code></pre>
+
+<p><strong>为什么四次，不能三次？</strong><br>
+因为 TCP 是<strong>全双工</strong>的，关闭需要双向各自关闭。收到 FIN 只表示对方不再发数据了，但自己可能还有数据没发完（半关闭状态）。所以服务端的 ACK 和 FIN 不能合并（除非恰好没有剩余数据）。</p>
+
+<p><strong>TIME_WAIT 为什么要等 2MSL（Maximum Segment Lifetime）？</strong><br>
+1. 确保最后一个 ACK 能到达对方（如果丢了，对方会重发 FIN，我方能重发 ACK）<br>
+2. 让本连接的所有报文在网络中消亡，避免新连接收到旧报文</p>
+
+<h4>面试追问链</h4>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>服务器出现大量 TIME_WAIT 怎么处理？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>TIME_WAIT 出现在<strong>主动关闭方</strong>。服务器大量 TIME_WAIT 说明服务器在主动关闭连接。<br><br>
+    解决方案：<br>
+    1. <code>net.ipv4.tcp_tw_reuse = 1</code>：允许复用 TIME_WAIT 连接（基于时间戳判断安全性）<br>
+    2. <code>net.ipv4.tcp_tw_recycle = 1</code>：快速回收（<strong>NAT 环境下会出问题，Linux 4.12+ 已删除</strong>）<br>
+    3. 减小 <code>tcp_fin_timeout</code>（缩短 TIME_WAIT 时间）<br>
+    4. 根本方案：使用<strong>长连接</strong>（HTTP Keep-Alive / 连接池）减少频繁建连断连</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>大量 CLOSE_WAIT 是什么原因？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>CLOSE_WAIT 出现在<strong>被动关闭方</strong>。收到对方 FIN 后回了 ACK，但自己没有调用 close() 发 FIN。<br><br>
+    <strong>根本原因：程序 bug——没有正确关闭连接</strong>（如 Socket/InputStream 没有在 finally 中 close）。<br><br>
+    排查：用 <code>netstat -anp | grep CLOSE_WAIT</code> 找到对应进程，检查代码中的连接释放逻辑。常见于 HttpClient 没有关闭 Response、数据库连接没归还连接池等。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>SYN Flood 攻击原理和防御？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p><strong>原理</strong>：攻击者发送大量伪造源 IP 的 SYN 包，服务器为每个 SYN 分配资源（半连接队列）并回 SYN+ACK，但永远收不到第三次 ACK → 半连接队列被填满 → 正常用户无法连接。<br><br>
+    <strong>防御</strong>：<br>
+    1. <strong>SYN Cookie</strong>：不分配资源，用加密算法编码信息到 SYN+ACK 的序列号中，收到第三次 ACK 时验证并还原 → 不占内存<br>
+    2. 增大半连接队列（tcp_max_syn_backlog）<br>
+    3. 减小 SYN+ACK 重试次数（tcp_synack_retries）<br>
+    4. 前端负载均衡/防火墙限速</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>TCP 的半连接队列和全连接队列是什么？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p><strong>半连接队列（SYN Queue）</strong>：存放收到 SYN 但还没完成三次握手的连接。大小由 tcp_max_syn_backlog 控制。<br>
+    <strong>全连接队列（Accept Queue）</strong>：存放完成三次握手但还没被应用 accept() 取走的连接。大小由 min(backlog, somaxconn) 控制。<br><br>
+    如果全连接队列满了，新完成握手的连接会被丢弃（或发 RST），客户端看到的是连接超时。线上排查：<code>ss -lnt</code> 看 Recv-Q（当前队列长度）和 Send-Q（最大长度）。</p>
+  </div>
+</div>
+</div>
+
+<div id="http">
+<h3>2.2 HTTP / HTTPS</h3>
+
+<h4>HTTP 版本演进</h4>
+
+<table>
+  <thead><tr><th>版本</th><th>关键特性</th><th>解决的问题</th></tr></thead>
+  <tbody>
+    <tr><td>HTTP/1.0</td><td>短连接（每次请求新建TCP）</td><td>—</td></tr>
+    <tr><td>HTTP/1.1</td><td>长连接（Keep-Alive）、管道化、Host头</td><td>减少TCP建连开销</td></tr>
+    <tr><td>HTTP/2</td><td><strong>多路复用</strong>、头部压缩(HPACK)、服务端推送、二进制帧</td><td>HTTP层队头阻塞</td></tr>
+    <tr><td>HTTP/3</td><td>QUIC协议（基于UDP）、0-RTT建连</td><td>TCP层队头阻塞</td></tr>
+  </tbody>
+</table>
+
+<p><strong>HTTP/2 多路复用</strong>：一个 TCP 连接上可以并行发送多个请求/响应，用 Stream ID 区分。解决了 HTTP/1.1 管道化的队头阻塞（前一个响应慢会阻塞后面的）。但 TCP 层仍有队头阻塞——一个包丢失导致整个连接的所有 Stream 等待重传。HTTP/3 用 UDP 从根本上解决。</p>
+
+<h4>HTTPS 握手过程</h4>
+<pre data-lang="text"><code>Client                                Server
+  │                                      │
+  │── ClientHello (支持的加密套件列表) ──→│
+  │                                      │
+  │←─ ServerHello (选定套件) ────────────│
+  │←─ Certificate (服务器证书) ──────────│
+  │←─ ServerHelloDone ──────────────────│
+  │                                      │
+  │   验证证书 → 生成预主密钥(Pre-Master Secret)
+  │   用服务器公钥加密预主密钥
+  │                                      │
+  │── ClientKeyExchange (加密的预主密钥) →│
+  │── ChangeCipherSpec ────────────────→│  双方计算出相同的对称密钥
+  │── Finished (加密验证) ────────────→│
+  │                                      │
+  │←─ ChangeCipherSpec ─────────────────│
+  │←─ Finished (加密验证) ──────────────│
+  │                                      │
+  │       后续通信使用对称加密              │</code></pre>
+
+<p><strong>核心思想</strong>：用<strong>非对称加密</strong>（RSA/ECDHE）安全地交换<strong>对称密钥</strong>，后续用对称加密（AES）通信（因为对称加密快得多）。</p>
+
+<div class="callout warn">
+<p><strong>注意</strong>：上图展示的是 TLS 1.2 RSA 密钥交换流程（已不推荐）。现代部署使用 <strong>ECDHE 密钥交换</strong>：服务端发送临时 DH 参数（ServerKeyExchange），双方独立计算共享密钥，实现<strong>前向安全</strong>（即使服务器私钥泄露也无法解密历史通信）。TLS 1.3 已强制删除 RSA 密钥交换，只保留 ECDHE。</p>
+</div>
+
+<h4>面试追问链</h4>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>HTTP/2 的多路复用和 HTTP/1.1 的长连接有什么区别？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>HTTP/1.1 长连接：一个 TCP 连接可以<strong>串行</strong>复用（发完一个请求等响应，再发下一个）。虽然有管道化但因为队头阻塞实际很少使用，浏览器通常开 6 个并行 TCP 连接。<br><br>
+    HTTP/2 多路复用：一个 TCP 连接上<strong>并行</strong>处理多个请求/响应。每个请求是一个 Stream，用帧（Frame）传输，帧上有 Stream ID 标识归属。不需要排队等待，真正的并发。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>如何防御中间人攻击？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>HTTPS 通过<strong>证书链验证</strong>防御中间人：<br>
+    1. 服务器证书由受信任的 CA 签发（浏览器/OS 内置根证书）<br>
+    2. 客户端验证：证书是否过期、域名是否匹配、签名是否合法（用 CA 公钥验证）<br>
+    3. 证书链：服务器证书 → 中间CA证书 → 根CA证书（逐级验证）<br><br>
+    如果攻击者伪造证书，因为没有 CA 的私钥无法生成合法签名，验证会失败。<br>
+    补充防御：HSTS（强制 HTTPS）、Certificate Pinning（固定证书指纹）。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>TLS 1.2 和 TLS 1.3 有什么区别？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>1. <strong>握手速度</strong>：TLS 1.2 需要 2-RTT，TLS 1.3 只需 1-RTT（且支持 0-RTT 恢复会话）<br>
+    2. <strong>安全性</strong>：TLS 1.3 删除了不安全的算法（RSA密钥交换、RC4、SHA-1、DES），只保留 AEAD 加密套件<br>
+    3. <strong>前向安全</strong>：TLS 1.3 强制使用 ECDHE 密钥交换（前向安全），即使服务器私钥泄露也无法解密历史通信<br>
+    4. <strong>ServerHello 后加密</strong>：TLS 1.3 在 ServerHello 之后就开始加密，握手过程更难被窃听</p>
+  </div>
+</div>
+</div>
+
+<div id="tcp-sticky">
+<h3>2.3 TCP 粘包拆包</h3>
+
+<h4>问题本质</h4>
+<p>TCP 是<strong>字节流协议</strong>，没有消息边界的概念。发送方发了两个"消息"，接收方可能一次收到合在一起（粘包），也可能一个消息被拆成两次收到（拆包）。</p>
+
+<h4>产生原因</h4>
+<ul>
+  <li><strong>发送端</strong>：Nagle 算法合并小包（等待凑够或超时才发）</li>
+  <li><strong>接收端</strong>：应用没及时读取缓冲区，多个包堆积</li>
+  <li><strong>MSS/MTU 限制</strong>：大消息被 TCP 分段</li>
+</ul>
+
+<h4>解决方案</h4>
+<table>
+  <thead><tr><th>方案</th><th>实现</th><th>优缺点</th></tr></thead>
+  <tbody>
+    <tr><td>固定长度</td><td>每条消息固定 N 字节</td><td>简单；浪费空间</td></tr>
+    <tr><td>分隔符</td><td>用特殊字符（如 \n）分割消息</td><td>灵活；需要转义</td></tr>
+    <tr><td><strong>长度字段 + 内容</strong></td><td>消息头放长度，后跟内容体</td><td><strong>推荐</strong>；通用高效</td></tr>
+  </tbody>
+</table>
+
+<h4>Netty 的解决方案</h4>
+<pre data-lang="java"><code>// 长度字段解码器（最常用）
+pipeline.addLast(new LengthFieldBasedFrameDecoder(
+    1024 * 1024,  // maxFrameLength 最大帧长度
+    0,            // lengthFieldOffset 长度字段偏移
+    4,            // lengthFieldLength 长度字段本身占4字节
+    0,            // lengthAdjustment 长度调整值
+    4             // initialBytesToStrip 跳过长度字段
+));
+
+// 分隔符解码器
+pipeline.addLast(new DelimiterBasedFrameDecoder(1024, Delimiters.lineDelimiter()));
+
+// 固定长度解码器
+pipeline.addLast(new FixedLengthFrameDecoder(64));</code></pre>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>你们系统中 Dubbo RPC 是怎么处理粘包拆包的？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>Dubbo 协议使用的是<strong>长度字段方案</strong>。Dubbo 协议头固定 16 字节，其中包含魔数（0xdabb）、请求/响应标志、序列化方式、以及<strong>消息体长度（4字节）</strong>。接收端先读 16 字节头部，解析出长度，再按长度读取完整消息体。底层基于 Netty，使用 DubboCodec（继承 ExchangeCodec）做编解码，本质上就是 LengthFieldBasedFrameDecoder 的变种。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>Nagle 算法是什么？什么时候需要关闭？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>Nagle 算法：如果有已发送但未确认的数据，则将新的小数据包缓存起来，等确认到达或凑够 MSS 再发送。目的是减少小包数量，提高网络利用率。<br><br>
+    需要关闭的场景（TCP_NODELAY=true）：<strong>实时性要求高的</strong>——如游戏、交互式终端、RPC 框架。延迟哪怕增加几毫秒都不可接受。Dubbo/gRPC 默认都关闭 Nagle。</p>
+  </div>
+</div>
+</div>
+
+</section>
+
+<!-- ============================================================ -->
+<!-- Part 3: System Design -->
+<!-- ============================================================ -->
+
+<section id="system-design">
+<h2>三、系统设计</h2>
+
+<div id="rate-limit">
+<h3>3.1 限流设计</h3>
+
+<h4>四种限流算法对比</h4>
+
+<table>
+  <thead><tr><th>算法</th><th>原理</th><th>优点</th><th>缺点</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>固定窗口</strong></td>
+      <td>固定时间窗口内计数</td>
+      <td>实现简单</td>
+      <td>窗口临界点可能出现 2 倍流量</td>
+    </tr>
+    <tr>
+      <td><strong>滑动窗口</strong></td>
+      <td>窗口随时间滑动，精确计数</td>
+      <td>平滑，无临界问题</td>
+      <td>需要记录每个请求时间戳，内存开销大</td>
+    </tr>
+    <tr>
+      <td><strong>漏桶</strong></td>
+      <td>请求进入桶中，以恒定速率流出</td>
+      <td>平滑输出，绝对匀速</td>
+      <td>无法应对突发流量（桶满就拒绝）</td>
+    </tr>
+    <tr>
+      <td><strong>令牌桶</strong></td>
+      <td>以恒定速率生成令牌，请求消耗令牌</td>
+      <td><strong>允许一定突发</strong>（桶中有积累的令牌）</td>
+      <td>实现稍复杂</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout tip">
+<p><strong>面试一句话区分</strong>：漏桶控制<strong>输出速率</strong>恒定（像水龙头匀速滴水），令牌桶控制<strong>平均速率</strong>恒定但允许突发（像攒了一把游戏币可以连续用）。大部分场景选<strong>令牌桶</strong>（Guava RateLimiter 就是令牌桶实现）。</p>
+</div>
+
+<h4>分布式限流：Redis + Lua 滑动窗口</h4>
+
+<pre data-lang="lua"><code>-- 滑动窗口限流 Lua 脚本
+local key = KEYS[1]                    -- 限流 key（如 rate_limit:user:123）
+local limit = tonumber(ARGV[1])        -- 窗口内最大请求数
+local window = tonumber(ARGV[2])       -- 窗口大小（毫秒）
+local now = tonumber(ARGV[3])          -- 当前时间戳（毫秒）
+
+-- 移除窗口外的旧请求
+redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
+
+-- 统计当前窗口内请求数
+local count = redis.call('ZCARD', key)
+
+if count &lt; limit then
+    -- 未超限：记录本次请求（score=时间戳，member=唯一值）
+    redis.call('ZADD', key, now, now .. ':' .. math.random(1000000))
+    redis.call('PEXPIRE', key, window)
+    return 1  -- 允许通过
+end
+
+return 0  -- 限流拒绝</code></pre>
+
+<h4>面试追问链</h4>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>令牌桶和漏桶怎么选？你们信贷系统用哪种？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>选择标准：<br>
+    - 需要<strong>严格匀速</strong>（如调用银行接口有QPS硬限制）→ 漏桶<br>
+    - 需要<strong>允许短时突发</strong>（如用户请求高峰）→ 令牌桶<br><br>
+    我们信贷系统分两层限流：<br>
+    1. <strong>网关层</strong>：Sentinel 令牌桶，限制每个用户 API 的 QPS（允许短时突发，不影响正常使用）<br>
+    2. <strong>下游银行接口</strong>：RateLimiter 漏桶/令牌桶，严格控制调用速率不超过银行给的上限（如 100QPS）</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>Sentinel 的限流原理是什么？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>Sentinel 用<strong>滑动窗口</strong>统计 QPS。具体实现：<br>
+    1. 把 1 秒分成多个小窗口（默认 2 个，每个 500ms）<br>
+    2. 用 LeapArray（环形数组）存储每个小窗口的统计数据（请求数、异常数、RT）<br>
+    3. 限流判断时，把当前滑动窗口内所有小窗口的数据求和<br>
+    4. 支持多种限流效果：直接拒绝、Warm Up（冷启动预热）、排队等待（漏桶效果）</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>集群限流和单机限流有什么区别？怎么实现集群限流？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>单机限流：每个节点独立限流，总流量 = 单机限额 × 节点数（不精确，节点间流量不均匀时会出问题）。<br><br>
+    集群限流：所有节点共享一个计数器，精确控制总流量。<br><br>
+    实现方式：<br>
+    1. <strong>Redis 集中式</strong>：所有节点通过 Redis 做全局计数（上面的 Lua 脚本），精确但有网络开销<br>
+    2. <strong>Token Server</strong>：专门的限流服务分发令牌（Sentinel 集群限流就是这个方案）<br>
+    3. <strong>本地预分配</strong>：中心节点把配额预分配给各节点，节点本地限流，定期上报和重新分配</p>
+  </div>
+</div>
+</div>
+
+<div id="distributed-id">
+<h3>3.2 分布式 ID</h3>
+
+<h4>方案对比</h4>
+
+<table>
+  <thead><tr><th>方案</th><th>优点</th><th>缺点</th><th>适用场景</th></tr></thead>
+  <tbody>
+    <tr><td>UUID</td><td>本地生成，无依赖</td><td>无序（B+树分裂）、太长（36字符）</td><td>日志、非主键场景</td></tr>
+    <tr><td>数据库自增</td><td>有序、简单</td><td>单点瓶颈、扩展难</td><td>小规模系统</td></tr>
+    <tr><td>号段模式</td><td>高性能、支持批量</td><td>需要DB、号段用完需重新获取</td><td>美团Leaf-segment</td></tr>
+    <tr><td><strong>Snowflake</strong></td><td>有序、高性能、去中心化</td><td>时钟回拨、机器ID分配</td><td>大部分互联网系统</td></tr>
+    <tr><td>Leaf-snowflake</td><td>解决时钟回拨+自动分配机器ID</td><td>依赖ZK</td><td>生产首选</td></tr>
+  </tbody>
+</table>
+
+<h4>Snowflake 结构</h4>
+<pre data-lang="text"><code>0 - 00000000 00000000 00000000 00000000 00000000 0 - 00000 00000 - 000000000000
+│                    41位时间戳                     │ 10位机器ID │   12位序列号
+│                                                   │ (5+5)      │   (4096/ms)
+│                                                   │            │
+符号位(0)            69年可用                     1024台       每毫秒4096个</code></pre>
+
+<h4>面试追问链</h4>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>时钟回拨怎么办？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>时钟回拨（NTP 校时导致时间倒退）会生成重复 ID。解决方案：<br><br>
+    1. <strong>等待追上</strong>：如果回拨 &lt; 5ms，sleep 等到时间追上（简单粗暴）<br>
+    2. <strong>报错拒绝</strong>：如果回拨 &gt; 5ms，直接报错告警，人工介入<br>
+    3. <strong>Leaf-snowflake 方案</strong>：通过 ZK 定期上报时间戳，启动时对比，发现回拨则拒绝启动<br>
+    4. <strong>百度 UidGenerator</strong>：预生成 ID 到 RingBuffer，消费时不依赖实时时钟<br>
+    5. <strong>美团改良</strong>：在 ID 中加入一个原子自增的 sequence 位段，即使时间回拨 sequence 也能保证唯一</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>为什么 UUID 不适合做 MySQL 主键？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>两个原因：<br>
+    1. <strong>B+ 树分裂</strong>：UUID 是随机的，插入时会分散在各个叶子节点，导致频繁页分裂，写性能差（相比自增ID顺序写入）<br>
+    2. <strong>空间浪费</strong>：UUID 36 字符 / 16 字节（BINARY），而 BIGINT 只有 8 字节。主键越大，二级索引越大（因为二级索引的叶子存的是主键值）<br><br>
+    如果非要用 UUID，可以用有序 UUID（如 UUID v7 基于时间戳），或者用 BINARY(16) 存储去掉横杠的 UUID。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>号段模式的双 Buffer 是什么？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>号段模式每次从DB获取一段ID（如1001-2000），用完再取下一段。问题是取号段时有一次DB查询，可能延迟。<br><br>
+    <strong>双 Buffer 优化</strong>：维护两个号段（当前段和下一段）。当前段消耗到一定比例（如10%剩余）时，<strong>异步预加载</strong>下一段。切换时直接用预加载好的段，实现无感知切换，消除 DB 查询延迟。<br><br>
+    美团 Leaf-segment 就是这个实现，99.9% 的情况下 ID 生成完全在内存中完成。</p>
+  </div>
+</div>
+
+<div class="callout tip">
+<p><strong>项目结合话术</strong>：「我们信贷系统用的是 Leaf-snowflake 方案生成分布式 ID。选它的原因：一是有序（方便按时间范围查询放款记录），二是高性能（本地生成无网络开销），三是通过 ZK 自动分配机器 ID 避免手动维护。时钟回拨问题我们通过两道防线解决：启动时校验（对比 ZK 上报的时间），运行时监测（回拨 &gt; 5ms 直接报警并拒绝服务）。」</p>
+</div>
+</div>
+
+<div id="seckill">
+<h3>3.3 秒杀系统设计</h3>
+
+<h4>分层架构</h4>
+<pre data-lang="text"><code>用户请求
+  │
+  ▼
+┌─────────────────────────────────┐
+│ CDN + 静态化                      │  前端：静态页面缓存、验证码、按钮防重复点击
+└────────────────┬────────────────┘
+                 ▼
+┌─────────────────────────────────┐
+│ Nginx / 网关层                    │  IP限流、黑名单、请求排队、身份校验
+└────────────────┬────────────────┘
+                 ▼
+┌─────────────────────────────────┐
+│ 服务层                            │  Redis预扣减库存(Lua原子)、生成下单消息
+└────────────────┬────────────────┘
+                 ▼
+┌─────────────────────────────────┐
+│ MQ 异步下单                       │  削峰填谷、异步创建订单
+└────────────────┬────────────────┘
+                 ▼
+┌─────────────────────────────────┐
+│ 数据库层                          │  乐观锁扣库存: UPDATE ... WHERE stock &gt; 0
+└─────────────────────────────────┘</code></pre>
+
+<h4>Redis 预扣减库存（Lua 原子操作）</h4>
+
+<pre data-lang="lua"><code>-- 秒杀扣减库存 Lua 脚本
+local stock_key = KEYS[1]
+local user_key = KEYS[2]          -- 用户已购买标记
+local user_id = ARGV[1]
+
+-- 1. 检查是否已购买（防止重复抢购）
+if redis.call('SISMEMBER', user_key, user_id) == 1 then
+    return -2  -- 已购买
+end
+
+-- 2. 检查库存
+local stock = tonumber(redis.call('GET', stock_key))
+if not stock or stock &lt;= 0 then
+    return -1  -- 库存不足
+end
+
+-- 3. 扣减库存 + 记录用户
+redis.call('DECR', stock_key)
+redis.call('SADD', user_key, user_id)
+return 1  -- 扣减成功，后续异步下单</code></pre>
+
+<h4>面试追问链</h4>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>如何防止超卖？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>三道防线：<br>
+    1. <strong>Redis Lua 原子扣减</strong>：GET + 判断 + DECR 在一个 Lua 脚本中原子执行，不会超卖<br>
+    2. <strong>数据库乐观锁兜底</strong>：<code>UPDATE stock SET count = count - 1 WHERE id = ? AND count &gt; 0</code>，affected_rows = 0 则库存不足<br>
+    3. <strong>最终兜底</strong>：订单创建时校验库存记录，发现异常则取消订单退库存<br><br>
+    为什么 Redis + DB 双重保障？因为 Redis 扣减后如果下游异常（MQ 丢消息），DB 层的乐观锁可以防止"Redis扣了但实际没卖出去"的少卖情况。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>热点 Key 怎么处理？比如一个商品库存 key 被百万请求打</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p><strong>库存分桶</strong>：把一个 stock_key 拆成 N 个子 key（如 stock:1001:0 ~ stock:1001:9），每个子 key 放 总库存/N 个库存。请求随机或 hash 到不同子 key，分散 Redis 单 key 压力。<br><br>
+    其他方案：<br>
+    1. <strong>本地缓存 + 标记</strong>：库存不足后在本地设置标记（JVM 内 AtomicBoolean），后续请求直接拒绝不打 Redis<br>
+    2. <strong>Redis Cluster</strong>：不同分桶 key 哈希到不同 slot，利用集群分散压力<br>
+    3. <strong>Proxy 层合并请求</strong>：Nginx Lua 合并 100 个请求为一个批量扣减</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>MQ 异步下单如何保证不丢单？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>1. <strong>生产者端</strong>：同步发送 + 确认机制（Pulsar 的 send().get() 确认持久化成功）<br>
+    2. <strong>Broker端</strong>：Pulsar BookKeeper Quorum Write（3副本写2确认），保证消息不丢<br>
+    3. <strong>消费者端</strong>：手动 ACK，处理完业务逻辑（订单入库）后才确认。如果消费失败，消息重新投递<br>
+    4. <strong>兜底</strong>：Redis 库存 vs DB 订单数的对账任务，发现不一致则告警人工处理<br><br>
+    我们的信贷系统放款流程也是类似的异步模式，通过本地消息表保证最终一致性。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question">
+    <span class="qa-badge qa-badge-q">Q</span>
+    <p>流量削峰还有什么方式？</p>
+  </div>
+  <div class="qa-answer">
+    <span class="qa-badge qa-badge-a">A</span>
+    <p>1. <strong>MQ 异步</strong>：最常用，把同步操作变异步（上面已讲）<br>
+    2. <strong>验证码/答题</strong>：在前端增加人工操作，把瞬间流量打散到几秒内<br>
+    3. <strong>分时段放量</strong>：不是一次性开放全部库存，而是每 10 秒放 100 个<br>
+    4. <strong>排队系统</strong>：用户进入虚拟排队（基于 Redis Sorted Set），按入队时间依次处理<br>
+    5. <strong>过载保护</strong>：系统负载超阈值后直接 fast-fail 返回"系统繁忙"</p>
+  </div>
+</div>
+
+<div class="callout warn">
+<p><strong>踩坑警告</strong>：<br>
+1. <strong>不要在秒杀流程中查数据库</strong>——DB 扛不住。库存用 Redis，用户是否已购用 Redis Set，订单异步入库<br>
+2. <strong>Redis 和 DB 库存不一致</strong>是必然的（异步嘛），需要对账任务兜底<br>
+3. <strong>别忘了防刷</strong>：同一用户/IP 的请求频率限制（令牌桶），否则机器人把库存秒完</p>
+</div>
+
+<div class="callout tip">
+<p><strong>项目结合话术</strong>：「虽然信贷系统不做秒杀，但我们的放款高峰和秒杀有相似之处——大促期间授信申请量是平时的 5-10 倍。我们的流量治理思路相同：网关限流（Sentinel）→ Redis 缓存热数据（授信规则/用户画像）→ MQ 削峰（Pulsar 异步处理授信评估）→ DB 层乐观锁保证额度不超扣。核心就是'能不访问 DB 就不访问 DB，能异步就异步'。」</p>
+</div>
+</div>
+
+</section>
+
+</main>
+</div>
+
+<button class="back-to-top" aria-label="回到顶部">&uarr;</button>
+<script src="./shared/script.js"></script>
+</body>
+</html>
+<script src="./shared/script.js"></script>
+</body>
+</html>

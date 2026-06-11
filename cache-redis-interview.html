@@ -1835,6 +1835,109 @@ save 60 10000</code></pre>
 </div>
 </div>
 
+<!-- 持久化面试追问链 -->
+<div class="callout warn">
+<p><strong>面试追问链</strong>：以下是面试官针对Redis持久化的常见递进追问，能接住这些问题说明你真正理解了底层原理。</p>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>RDB 的 fork + COW 具体怎么工作的？有什么风险？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p>fork 时操作系统并不会真正复制父进程的内存页，而是让子进程和父进程<strong>共享相同的物理内存页</strong>，标记为只读。当父进程需要修改某个内存页时，内核触发<strong>缺页中断</strong>，复制这一页出来给父进程写——这就是 Copy-On-Write。</p>
+        <p><strong>三大风险</strong>：</p>
+        <ul>
+            <li><strong>内存翻倍风险</strong>：RDB 期间写入频繁时，大量页被 COW 复制，极端情况下内存占用接近 2 倍。生产环境一般预留 50% 内存余量</li>
+            <li><strong>fork 本身的耗时</strong>：虽然 COW 让 fork 很快（只复制页表），但如果 Redis 占用了几十 GB 内存，光复制页表也需要几百毫秒甚至秒级，这期间 Redis 主线程是<strong>阻塞的</strong></li>
+            <li><strong>THP（Transparent Huge Pages）问题</strong>：Linux 默认开启 THP，把 4KB 页变成 2MB 大页。COW 时复制一个 2MB 的页比 4KB 贵得多，导致 fork 期间延迟暴增。生产必须关闭：<code>echo never &gt; /sys/kernel/mm/transparent_hugepage/enabled</code></li>
+        </ul>
+    </div>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>AOF 为什么是先执行再写日志？和 MySQL 的 WAL 有什么区别？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p>MySQL 的 redo log 是 WAL（Write-Ahead Logging），先写日志再修改数据页。Redis 选择<strong>先执行再写日志</strong>，原因有二：</p>
+        <ul>
+            <li><strong>不需要语法检查</strong>：先执行后写日志，保证写入 AOF 的一定是执行成功的命令，避免恢复时遇到语法错误</li>
+            <li><strong>不阻塞当前命令</strong>：写日志在命令执行之后，不影响当前命令的执行延迟</li>
+        </ul>
+        <p><strong>代价</strong>：如果命令执行成功但还没写 AOF 就 crash 了，这条命令会丢。所以 AOF 提供三种 fsync 策略：always（每条刷盘）、everysec（每秒，生产推荐）、no（OS 决定）。</p>
+    </div>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>AOF 重写期间如何保证不丢数据？如果重写期间 crash 了会怎样？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p>关键机制是<strong>AOF 重写缓冲区</strong>：</p>
+        <pre data-lang="text"><code>1. 主进程 fork 子进程做 AOF 重写
+2. 重写期间，主进程收到新写命令：
+   - 写入原来的 AOF 缓冲区（老 AOF 继续追加，保证 crash 安全）
+   - 同时写入 AOF 重写缓冲区（给子进程的增量）
+3. 子进程完成后，主进程把重写缓冲区追加到新 AOF 末尾
+4. 原子替换（rename）：用新 AOF 替换老 AOF</code></pre>
+        <p><strong>如果重写期间 crash</strong>：不会丢数据。因为在 rename（原子替换）之前，老 AOF 文件一直是完整的。crash 后恢复用的是老 AOF，一切正常。</p>
+    </div>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>Redis 7.0 的 MP-AOF（Multi-Part AOF）是什么？解决了什么问题？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p>Redis 7.0 把原来的单一 AOF 文件拆分成多文件架构：</p>
+        <pre data-lang="text"><code>appendonlydir/
+├── appendonly.aof.1.base.rdb   # BASE：RDB 格式全量快照
+├── appendonly.aof.1.incr.aof   # INCR：历史增量
+├── appendonly.aof.2.incr.aof   # INCR：当前正在写入的增量
+└── appendonly.aof.manifest     # MANIFEST：文件清单</code></pre>
+        <p><strong>解决的核心痛点</strong>：</p>
+        <ul>
+            <li><strong>消除重写缓冲区的内存开销</strong>：旧方案的 aof_rewrite_buf 在大流量下可能占几百 MB，MP-AOF 直接写入新的 INCR 文件</li>
+            <li><strong>消除 rename 的原子替换风险</strong>：通过 MANIFEST 原子切换，更安全</li>
+            <li><strong>更灵活的文件管理</strong>：过期文件后台异步删除，不阻塞主线程</li>
+        </ul>
+    </div>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>什么场景下你不会用混合持久化？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p>三个场景：</p>
+        <ul>
+            <li><strong>纯缓存场景</strong>：数据全部可从 DB 重建，关闭 RDB 和 AOF 省 IO 资源</li>
+            <li><strong>需要时间点恢复（Point-in-Time Recovery）</strong>：混合持久化的 AOF 文件头是 RDB 二进制格式，不方便做日志回放式的精确时间点恢复</li>
+            <li><strong>Redis 版本低于 4.0</strong>：混合持久化是 4.0 才引入的特性</li>
+        </ul>
+    </div>
+</div>
+
+<div class="callout tip">
+<p><strong>踩坑警告</strong>：<br>
+- 硕磐面试教训：问持久化脑子一片空白。死记口诀：<strong>Redis 持久化 = RDB + AOF + 混合，先报名字再展开</strong><br>
+- 不要混淆 AOF 和 WAL：AOF 是<strong>后写日志</strong>（write-after-execute），MySQL 的 redo log 才是 WAL<br>
+- fork 的坑：THP 让 COW 代价暴增，生产必须关闭<br>
+<br>
+<strong>项目结合话术</strong>："在我们的信贷系统中，Redis 用于缓存用户额度和分布式锁。开启混合持久化 + AOF everysec，选择混合而不是纯 AOF 因为重启后需要快速恢复缓存预热数据（RDB 恢复速度是 AOF 的 5-10 倍），同时不能接受丢失超过 1 秒的锁状态。Redis 实例内存控制在 10GB 以内避免 fork 耗时过长，THP 通过 ansible 统一关闭。"</p>
+</div>
+
 </section>
 
 <!-- ==================== 第四章 ==================== -->
@@ -2553,6 +2656,90 @@ sentinel parallel-syncs mymaster 1                # 同时同步的slave数</cod
   <li><strong>消息类型</strong>：PING/PONG（心跳）、MEET（加入集群）、FAIL（标记节点故障）</li>
 </ul>
 <p>Gossip 的代价是状态收敛不是瞬时的——一个节点宕机的消息传播到全集群需要 O(log N) 轮通信周期（通常几秒）。节点故障检测的流程：节点 A 发现节点 B 超时未回复 PING → A 标记 B 为 PFAIL（疑似故障）→ A 通过 Gossip 传播 PFAIL 信息 → 当超过半数 master 节点都标记 B 为 PFAIL 时，B 被标记为 FAIL（确认故障）→ 触发从节点提升。</p>
+
+<!-- Cluster 面试追问链 -->
+<div class="callout warn">
+<p><strong>面试追问链</strong>：以下是面试官针对 Redis Cluster 的常见递进追问，从原理到实战层层深入。</p>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>为什么是 16384 个槽，不是 65536？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p>来自 Gossip 协议的心跳包设计。每次 PING/PONG 通信都要携带一个 <strong>bitmap</strong> 标识自己负责哪些槽：</p>
+        <pre data-lang="text"><code>16384 slots → bitmap = 16384 / 8 = 2KB
+65536 slots → bitmap = 65536 / 8 = 8KB</code></pre>
+        <p>Gossip 心跳包每秒发很多次（每个节点每秒随机选几个节点 PING），8KB 的带宽开销太大。2KB 是合理的权衡。另外 Redis Cluster 设计目标是<strong>最多 1000 个节点</strong>，16384 个槽分给 1000 个节点平均每个 16 个槽，粒度足够细。作者 antirez 在 GitHub issue 里解释过这个设计决策。</p>
+    </div>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>一个 Master 节点故障了，Cluster 怎么处理？选举过程是怎样的？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p><strong>故障检测（两阶段）</strong>：</p>
+        <ul>
+            <li><strong>主观下线（PFAIL）</strong>：某节点发现另一节点超过 <code>cluster-node-timeout</code> 没回复 PONG，标记为 PFAIL</li>
+            <li><strong>客观下线（FAIL）</strong>：集群中超过半数 master 都标记某节点为 PFAIL 时，该节点被标记为 FAIL，向全集群广播</li>
+        </ul>
+        <p><strong>Failover 过程</strong>：</p>
+        <pre data-lang="text"><code>1. 故障 master 的 slave 发现 master 变成 FAIL
+2. slave 向集群广播 FAILOVER_AUTH_REQUEST
+3. 其他 master 投票（每个 master 对每个 epoch 只投一票）
+4. 某 slave 获得超过半数 master 投票 → 晋升为新 master
+5. 新 master 接管原来的 slots，广播新配置 epoch</code></pre>
+        <p><strong>选举优先级</strong>：如果有多个 slave，优先级由 slave-priority 配置（值越小越优先，0 表示永不参选）和复制偏移量（offset 更大的等待时间更短）共同决定。</p>
+    </div>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>Redis Cluster 为什么不能保证强一致性？如何防止脑裂？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p>根本原因：<strong>异步复制</strong>。客户端写入 Master → Master 返回 OK → Master 异步复制给 Slave（还没完成）→ Master crash → Slave failover → 那次写入丢了。这是 CAP 中选择 AP 的代价。</p>
+        <p><strong>防脑裂</strong>：</p>
+        <pre data-lang="redis"><code># redis.conf
+min-replicas-to-write 1     # master 至少有1个 slave 确认了复制才接受写入
+min-replicas-max-lag 10     # slave 的复制延迟不超过10秒</code></pre>
+        <p>原理：当 master 发现自己连不上足够的 slave，就<strong>拒绝写入</strong>。这样少数派分区中的 master 不会接受新写入。代价：slave 真故障时 master 也会拒绝写入，影响可用性——CAP trade-off。</p>
+    </div>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>客户端是怎么做 Smart 路由的？MOVED 和 ASK 收到后的处理有什么不同？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p>Smart 客户端（JedisCluster、Lettuce）工作方式：</p>
+        <ul>
+            <li><strong>启动时</strong>：连接任一节点执行 <code>CLUSTER SLOTS</code>，获取完整的 slot→node 映射表缓存在本地</li>
+            <li><strong>请求时</strong>：对 key 算 CRC16 % 16384 得到 slot，查本地映射表直接发到对应节点</li>
+            <li><strong>收到 MOVED</strong>：<strong>更新</strong>本地映射表（永久重定向，槽已经确定归属新节点）</li>
+            <li><strong>收到 ASK</strong>：<strong>不更新</strong>映射表（临时重定向，槽正在迁移中），本次请求转发到目标节点并先发 <code>ASKING</code> 命令</li>
+        </ul>
+        <p>正常情况下一次命中正确节点，不需要重定向。只有扩容/缩容/故障迁移时才触发 MOVED/ASK。</p>
+    </div>
+</div>
+
+<div class="callout tip">
+<p><strong>踩坑警告</strong>：<br>
+- 中控面试教训：被问 Redis Cluster 完全说不出来。至少秒答：<strong>16384 槽 + CRC16 分片 + MOVED/ASK + Gossip 通信</strong><br>
+- MOVED 是永久更新路由，ASK 是临时不更新路由，不要搞混<br>
+<br>
+<strong>项目结合话术</strong>："我们信贷系统的 Redis 集群是 6 节点（3 主 3 从），16384 个槽均匀分配。选 Cluster 而不是 Sentinel 因为数据量大需要水平扩展。用 Lettuce 客户端自带 Smart 路由。上线初期遇到过扩容时的 ASK 风暴——迁移 slot 太快导致大量 ASK 重定向，后来调小迁移速率才平稳。配置了 min-replicas-to-write 1 防脑裂。"</p>
+</div>
+
 </div>
 
 <div id="ch5-4">
@@ -2716,6 +2903,140 @@ public User getHotUserLogicalExpire(Long userId) {
   <li><strong>熔断降级</strong>：检测到 DB 压力过大时，直接返回默认值或错误，保护数据库不被打死</li>
   <li><strong>Redis 高可用</strong>：Sentinel/Cluster 保证缓存层本身不整体宕机</li>
 </ul>
+
+<!-- 缓存三问题面试追问链 -->
+<div class="callout warn">
+<p><strong>面试追问链</strong>：以下是面试官针对缓存穿透/击穿/雪崩的常见递进追问，从概念区分到代码实现层层深入。</p>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>布隆过滤器的原理？误判率怎么计算？什么时候需要重建？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p><strong>原理</strong>：一个大的 bit 数组 + K 个哈希函数。插入时用 K 个哈希函数算出 K 个位置置为 1。查询时看 K 个位置是否都是 1——都是 1 则"可能存在"，有任何 0 则"一定不存在"。</p>
+        <pre data-lang="text"><code>误判率 ≈ (1 - e^(-kn/m))^k
+m = bit数组大小, n = 已插入元素数量, k = 哈希函数个数
+
+工程经验：
+- 1% 误判率：每个元素约 10 bit
+- 0.1% 误判率：每个元素约 15 bit
+- 1亿数据 + 1% 误判率 ≈ 120MB 内存</code></pre>
+        <p><strong>重建时机</strong>：布隆过滤器<strong>不支持删除</strong>（标准版本），数据删除后仍判断为"可能存在"。解决方案：定期从 DB 全量重建、使用 Counting Bloom Filter（支持删除）、或用 Redis 的 BF.RESERVE/BF.ADD（RedisBloom 模块）。</p>
+    </div>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>互斥锁防击穿具体怎么实现？有哪些关键细节？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <pre data-lang="java"><code>public String getData(String key) {
+    // 1. 先查缓存
+    String value = redis.get(key);
+    if (value != null) return value;
+
+    // 2. 缓存未命中，尝试获取互斥锁
+    String lockKey = "lock:" + key;
+    boolean locked = redis.set(lockKey, "1", "NX", "EX", 10);
+
+    if (locked) {
+        try {
+            // 3. 双重检查：等锁期间其他线程可能已加载缓存
+            value = redis.get(key);
+            if (value != null) return value;
+            // 4. 查DB并写入缓存
+            value = db.query(key);
+            redis.setex(key, 300, value != null ? value : "NULL");
+            return value;
+        } finally {
+            redis.del(lockKey);
+        }
+    } else {
+        // 5. 没拿到锁，短暂休眠后重试（生产要加重试次数限制）
+        Thread.sleep(50);
+        return getData(key);
+    }
+}</code></pre>
+        <p><strong>关键细节</strong>：锁要设超时时间防死锁；要双重检查（Double Check）减少不必要的 DB 查询；重试要有次数限制避免无限递归。</p>
+    </div>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>逻辑过期和物理过期有什么区别？各自适用什么场景？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p><strong>物理过期</strong>：用 Redis TTL 机制，key 到期后被真正删除。简单但热点 key 过期瞬间有击穿风险。</p>
+        <p><strong>逻辑过期</strong>：key 永不设 TTL，但 value 中包含逻辑过期时间。读取时检查是否逻辑过期，过期则<strong>异步更新</strong>，当前请求返回旧数据。</p>
+        <pre data-lang="java"><code>// 逻辑过期核心逻辑
+if (System.currentTimeMillis() &lt; cacheData.expireTime) {
+    return cacheData.data;  // 没过期，直接返回
+}
+// 已过期，异步刷新 + 返回旧数据
+if (tryLock(key)) {
+    executor.submit(() -&gt; {
+        Object newData = db.query(key);
+        redis.set(key, new CacheData(newData, now() + TTL));
+        unlock(key);
+    });
+}
+return cacheData.data;  // 短暂不一致，但保证可用性</code></pre>
+        <p><strong>选型</strong>：普通 key 用物理过期 + 互斥锁；超热点 key（如秒杀商品详情）用逻辑过期，保证永远有数据返回。</p>
+    </div>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>雪崩场景下如果 Redis 整个集群宕机了怎么办？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p>多层防御策略：</p>
+        <pre data-lang="text"><code>请求 → 本地缓存(Caffeine) → Redis → 数据库
+         ↓miss               ↓miss     ↓限流/熔断
+       查Redis             查DB       返回降级值</code></pre>
+        <ul>
+            <li><strong>多级缓存</strong>：L1（Caffeine）+ L2（Redis）+ DB，Redis 挂了还有本地缓存兜底</li>
+            <li><strong>熔断降级</strong>：Hystrix/Sentinel 监控 DB 调用量，超阈值直接熔断返回降级结果</li>
+            <li><strong>限流</strong>：对 DB 层做限流，即使缓存全失效也不会压垮 DB</li>
+            <li><strong>缓存预热</strong>：Redis 恢复后先预热热点数据再切流量</li>
+        </ul>
+    </div>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>你们信贷系统的缓存预热怎么做的？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <ul>
+            <li><strong>定时预热</strong>：每天凌晨用定时任务把活跃用户（最近 30 天有操作）的额度信息加载到 Redis</li>
+            <li><strong>懒加载</strong>：非活跃用户访问时再从 DB 加载，cache-aside 模式</li>
+            <li><strong>发布时预热</strong>：服务新版本发布或 Redis 扩容后，先通过预热脚本加载核心数据再切流量</li>
+            <li><strong>过期时间差异化</strong>：热点用户 TTL 30 分钟，普通用户 TTL 5 分钟，避免同时过期</li>
+        </ul>
+    </div>
+</div>
+
+<div class="callout tip">
+<p><strong>踩坑警告</strong>：<br>
+- 硕磐面试教训：穿透和击穿搞混了。关键区分：<strong>穿透 = 数据不存在；击穿 = 热点 key 过期</strong><br>
+- 布隆过滤器必须知道：bit 数组 + K 个哈希 + 只能判"一定不存在" + 不支持删除<br>
+- 互斥锁实现别漏：SETNX + 超时 + 双重检查 + 重试限制<br>
+<br>
+<strong>项目结合话术</strong>："在信贷系统中，缓存防护是分层的。穿透防护：布隆过滤器拦截不存在的用户 ID（防薅羊毛攻击），每天凌晨从 DB 全量重建。击穿防护：用户额度是热点数据用互斥锁（SETNX），风控决策结果用逻辑过期——即使数据过期几秒也比击穿导致风控超时好。雪崩防护：过期时间加随机偏移（基础 5 分钟 + 随机 0-60 秒），加 Sentinel 多级缓存兜底。"</p>
+</div>
+
 </div>
 
 <div id="ch6-2">
@@ -3310,6 +3631,99 @@ public void updateWithFencing(String key, String value, long fencingToken) {
 2. 再主动提到 Martin Kleppmann 的批评（展示你看过更深层的讨论）<br>
 3. 结论："实际工程中，如果对锁的正确性要求极高（如金融扣款），我会用 ZooKeeper/etcd 的 CP 锁；如果只是防重复计算、防缓存击穿，Redisson 的单实例锁 + watchdog 就足够了"</p>
 </div>
+
+<!-- Redlock 面试追问链 -->
+<div class="callout warn">
+<p><strong>面试追问链</strong>：以下是面试官针对 Redlock 和分布式锁的常见递进追问，重点在争议分析和工程选型。</p>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>Martin Kleppmann 具体批评了 Redlock 什么？antirez 怎么回应的？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p><strong>Kleppmann 的两个核心质疑</strong>：</p>
+        <ul>
+            <li><strong>时钟假设问题</strong>：如果某节点发生时钟跳跃（NTP 校时、闰秒、VM 暂停），锁可能在某节点提前过期，导致两个客户端同时持有锁</li>
+            <li><strong>GC pause 问题</strong>：Client A 获取锁后发生长 Full GC → 锁已过期 → Client B 获取锁 → A 恢复后以为还持有锁 → 两者并发操作共享资源</li>
+        </ul>
+        <p><strong>antirez 的回应</strong>：</p>
+        <ul>
+            <li>现代服务器用 NTP 保证毫秒级精度，大幅跳跃是运维问题不是算法问题。可配 NTP 为渐进式调整（slew mode）</li>
+            <li>GC pause 不是 Redlock 特有问题——<strong>任何分布式锁</strong>（包括 ZooKeeper）都有这个问题</li>
+            <li>如果存储层支持 fencing token（CAS），那何必还要分布式锁？有些场景就是存储层不支持 CAS 才需要锁</li>
+        </ul>
+        <p><strong>本质分歧</strong>："理论正确性 vs 工程实用性"。业务能容忍极小概率并发冲突用 Redlock；绝对不能有并发冲突（金融扣款）用 ZooKeeper/etcd + fencing token。</p>
+        <p><strong>补充说明</strong>：ZooKeeper 相比 Redlock 多了一个重要优势——<strong>session 超时通知机制</strong>。当 ZK 客户端因 GC 暂停或网络问题导致 session 超时，客户端会收到 SESSION_EXPIRED 通知，从而知道自己已丢失锁。Redlock 没有这个通知机制，客户端 GC 恢复后可能错误地认为仍持有锁。不过对于防止脏写，两者都需要 fencing token 配合存储端校验。</p>
+    </div>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>在你的信贷系统里，你会用 Redlock 还是 ZooKeeper？为什么？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p><strong>我们选择单节点 Redis 锁 + 业务层幂等兜底，而不是 Redlock</strong>。原因：</p>
+        <ul>
+            <li><strong>运维成本</strong>：Redlock 需要 5 个独立 Redis 实例，运维复杂度高</li>
+            <li><strong>场景不需要</strong>：锁是防止同一笔授信申请被重复处理，但有三层幂等保证（唯一索引 + Redis SETNX + 状态机），即使锁失效业务层也能兜住</li>
+            <li><strong>如果真需要强一致锁</strong>：选 etcd（K8s 生态内已有集群），不选 Redlock</li>
+        </ul>
+        <p><strong>什么时候用 Redlock</strong>：需要比单节点锁更可靠，但不想引入 ZK/etcd 这么重的组件时。比如多机房部署、Redis 主从切换可能导致锁丢失的场景。</p>
+    </div>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>如果 Redlock 中一个节点 crash 重启了会怎样？怎么解决？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p>经典安全漏洞场景（假设 5 节点，Client A 在 Node1-3 加锁成功）：</p>
+        <pre data-lang="text"><code>1. Node3 crash → 重启 → 内存中锁数据丢失
+2. Client B 在 Node3、4、5 加锁成功（3个节点）
+3. A 和 B 同时持有锁！</code></pre>
+        <p><strong>解决方案：延迟重启（Delayed Restart）</strong>。Redis 节点 crash 后不立即重启，等待至少一个完整的 TTL 时间再重启——这样丢失的锁也已自然过期。或者开启 AOF（fsync=always），确保锁数据不丢，但影响性能。</p>
+    </div>
+</div>
+
+<div class="qa">
+    <div class="qa-question">
+        <span class="qa-badge qa-badge-q">Q</span>
+        <p>fencing token 具体怎么实现？为什么能解决锁失效后的安全问题？</p>
+    </div>
+    <div class="qa-answer">
+        <span class="qa-badge qa-badge-a">A</span>
+        <p>Fencing token 是 Kleppmann 提出的"兜底方案"：每次获取锁时拿到一个<strong>单调递增的编号</strong>，存储层拒绝旧编号的写入。</p>
+        <pre data-lang="java"><code>// 存储层校验逻辑
+public void writeWithFencing(String data, long fencingToken) {
+    // UPDATE resource SET data=?, token=?
+    //   WHERE id=? AND token &lt;= ?
+    int rows = db.update(
+        "UPDATE resource SET data=?, token=? WHERE id=? AND token &lt;= ?",
+        data, fencingToken, resourceId, fencingToken);
+    if (rows == 0) {
+        throw new FencingException("Stale lock: token rejected");
+    }
+}</code></pre>
+        <p>即使锁因 GC pause 过期后，旧 token 的写入会被存储层拒绝。ZooKeeper 的顺序节点天然就是 fencing token。</p>
+    </div>
+</div>
+
+<div class="callout tip">
+<p><strong>踩坑警告</strong>：<br>
+- 中控面试教训：直接说"记不清了"。至少说出：<strong>N 个节点、半数以上成功、有争议（Kleppmann 批评）</strong><br>
+- Redlock 和 Cluster 是两回事：Redlock 是 N 个<strong>独立</strong>实例，和 Cluster 无关<br>
+- 只知原理不知争议会被追问到哑口无言<br>
+<br>
+<strong>项目结合话术</strong>："我们信贷系统的分布式锁是单节点 Redis（SETNX + expire + Redisson watchdog 续期），没用 Redlock。锁主要防止同一笔申请的并发重复提交，不是跨机房协调。即使极端情况 Redis 主从切换导致锁丢失，业务层有三层幂等兜底：DB 唯一索引 + 状态机 + 下游银行接口幂等号。锁的作用更多是减少无效请求穿透到 DB。如果未来迁多活架构，会考虑 etcd（Raft 协议一致性更强）。"</p>
+</div>
+
 </div>
 
 <div id="ch8-3">

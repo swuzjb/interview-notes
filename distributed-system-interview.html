@@ -200,7 +200,7 @@
 <p><strong>CAP 定理 (Brewer's Theorem)</strong> 指出分布式系统不可能同时满足以下三个保证：</p>
 
 <ul>
-  <li><strong>Consistency (一致性)</strong>：所有节点在同一时刻看到相同的数据</li>
+  <li><strong>Consistency (一致性)</strong>：每次读操作都能返回最近一次成功写操作的结果——即系统对外表现得如同只有一个数据副本，所有操作原子性地瞬间完成。严格来说这是<strong>线性一致性（Linearizability）</strong>，而非物理上所有节点瞬间同步。</li>
   <li><strong>Availability (可用性)</strong>：每个请求都能在合理时间内收到非错误响应</li>
   <li><strong>Partition Tolerance (分区容错)</strong>：网络分区发生时系统仍能继续运行</li>
 </ul>
@@ -314,6 +314,89 @@ BASE: 乐观策略，优先保证可用性，异步修复一致性</code></pre>
 
 <div class="callout levchin">
   <p><strong>BASE 不是 ACID 的对立面，而是补充。在 PayPal 的订单系统中，我们核心账务用 ACID，但订单状态流转用 BASE。关键问题不是"选 ACID 还是 BASE"，而是"哪些数据必须 ACID，哪些可以 BASE"。</strong></p>
+</div>
+
+<h3>CAP + BASE 深度追问链</h3>
+
+<div class="qa">
+  <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>面试追问：CAP 定理中，为什么说 P 不是选项而是前提？很多人说"三选二"是不是不准确？</p></div>
+  <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span>
+    <p><strong>"三选二"是一种误导性的表述。</strong>正确理解是：<br><br>
+    在分布式系统中，<strong>网络分区（P）是物理必然</strong>——你不可能保证两个数据中心之间的网线永远不断、永远不丢包。
+    这就像你不能保证"明天不下雨"一样，它是客观现实不是选择。<br><br>
+    所以真正的选择是：<strong>当网络分区发生时（P 已经发生），你选择保 C（一致性）还是保 A（可用性）？</strong><br>
+    - 选 CP：分区期间拒绝服务（返回错误），保证不给出错误数据<br>
+    - 选 AP：分区期间继续服务，但可能返回过期数据<br><br>
+    <strong>注意：</strong>当网络正常时（没有分区），CAP 不起作用——系统可以同时满足 C 和 A。
+    CAP 只在故障（分区）时才强迫你做选择。这就是为什么实际系统不是"永远 CP"或"永远 AP"，
+    而是"正常时 CA，故障时选 CP 或 AP"。（注意：这不是说系统在 CA 和 CP/AP 之间动态切换。CAP 描述的是系统的设计保证——分区发生时如何取舍。网络正常时 C 和 A 本身不矛盾。）</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>追问：你们信贷系统选的是 AP 还是 CP？为什么？具体怎么实现最终一致性？</p></div>
+  <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span>
+    <p><strong>我们是 AP + 最终一致性，但核心资金链路局部 CP。</strong><br><br>
+    <strong>整体架构选择 AP 的原因：</strong><br>
+    信贷系统的核心 SLA 是"用户提交授信申请后 3 秒内给出结果"。
+    如果选 CP，当某个服务节点故障时系统拒绝服务，用户体验不可接受。
+    我们宁可在极端情况下返回"授信审批中"（软状态），事后异步推送结果，也不愿让用户看到"系统不可用"。<br><br>
+    <strong>最终一致性实现（本地消息表模式）：</strong><br>
+    ① 授信服务完成审批后，将审批结果和"发送通知"消息写入同一个本地事务；<br>
+    ② 定时任务每 5 秒扫描未发送的消息，投递到 Pulsar；<br>
+    ③ 下游服务（额度服务、通知服务）消费消息并处理；<br>
+    ④ 如果消费失败，Pulsar 自动重试，最终进入 DLQ 人工处理。<br><br>
+    <strong>局部 CP（资金链路）：</strong><br>
+    放款操作涉及真实资金流动，这里我们用 TCC 保证强一致：
+    先冻结额度（Try）→ 调用资金方放款 → 确认扣减额度（Confirm）或回滚（Cancel）。
+    放款期间如果网络分区，宁可"放款失败让用户重新申请"也不能"多放一分钱"。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>追问：BASE 理论中的"软状态"具体是什么？你们系统里哪些地方有软状态？</p></div>
+  <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span>
+    <p><strong>软状态 = 系统中存在的"中间态"，即数据在不同节点之间同步的过渡期。</strong><br><br>
+    <strong>我们系统的软状态举例：</strong><br>
+    ①<strong>授信审批中：</strong>用户提交申请后，授信服务已经完成审批并写入 DB，
+    但通知服务还没消费到消息——此时用户看到的状态是"审批中"（旧数据），而非"已通过"（新数据）。
+    这个时间窗口（几百毫秒到几秒）就是软状态。<br><br>
+    ②<strong>额度更新中：</strong>放款成功后，资金已划转，但额度服务还没扣减可用额度——
+    用户可能短暂看到"可用额度还没变"的情况。<br><br>
+    ③<strong>对账差异：</strong>本地账和渠道方的账在 T+1 对账前可能存在差异（一方已记账另一方还没记）。<br><br>
+    <strong>关键设计原则：</strong>软状态可以接受，但要控制它的持续时间。
+    我们通过监控"消息消费延迟"来保证软状态不超过 SLA（授信通知 &lt; 3 秒，额度更新 &lt; 5 秒）。
+    超时则告警介入。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>追问：最终一致性的"最终"到底是多久？如果一直不一致怎么办？</p></div>
+  <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span>
+    <p><strong>"最终"没有统一定义，取决于业务 SLA 和系统设计。</strong><br><br>
+    <strong>我们的分级定义：</strong><br>
+    - 授信结果通知：最终一致窗口 &lt; 3 秒（P99）<br>
+    - 额度变更同步：最终一致窗口 &lt; 5 秒（P99）<br>
+    - 对账修复：最终一致窗口 &lt; T+1（24小时）<br><br>
+    <strong>如果一直不一致怎么办（兜底机制）：</strong><br>
+    ①<strong>消息重试</strong>：Pulsar Retry Topic 自动重试 16 次（指数退避，总计约 4 小时）；<br>
+    ②<strong>死信队列 + 告警</strong>：超过重试次数进入 DLQ，触发企业微信告警，人工介入；<br>
+    ③<strong>对账任务</strong>：T+1 定时任务对比上下游数据，发现差异后触发补偿（自动补发消息或人工修复）；<br>
+    ④<strong>兜底脚本</strong>：运维平台提供手动触发"数据修复"的工具，处理极端情况。<br><br>
+    <strong>核心原则：</strong>最终一致性不是"不管一致性"，而是"不要求实时一致，但通过多层兜底确保最终一定一致"。</p>
+  </div>
+</div>
+
+<div class="callout tip">
+  <p><strong>项目结合话术</strong>："我们信贷系统整体是 AP + 最终一致性架构，通过本地消息表保证跨服务数据最终一致。
+  核心资金链路局部用 TCC 保强一致。软状态窗口控制在秒级，通过消息重试 + DLQ + T+1 对账三层兜底。
+  这套方案让我们在保证 99.99% 可用性的同时，资金零差错运行了两年。"</p>
+</div>
+
+<div class="callout warn">
+  <p><strong>踩坑警告</strong>：面试中千万不要说"我们系统是 CP 的"然后举不出在网络分区时拒绝服务的例子。
+  大多数互联网系统都是 AP 的——如果你的系统从来没有因为网络故障而拒绝服务过，那它就是 AP 而不是 CP。
+  另外，不要把"强一致性事务"和"CAP 中的 C"混淆：单机 MySQL 事务的 ACID 一致性和分布式 CAP 的一致性是两个概念。</p>
 </div>
 
 </section>
@@ -668,6 +751,144 @@ BASE: 乐观策略，优先保证可用性，异步修复一致性</code></pre>
 
 <div class="callout warn">
   <p><strong>TCC 的核心难点不在流程本身，而在异常处理。</strong>面试中需要明确说出空回滚、悬挂、幂等三个问题及各自的解决方案。许多候选人只说得出 Try-Confirm-Cancel 的流程，却忽略了异常分支。</p>
+</div>
+
+<h4>TCC 三大异常深度追问链</h4>
+
+<div class="qa">
+  <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>TCC 的"空回滚"是什么？什么场景下会发生？怎么解决？</p></div>
+  <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span>
+    <p><strong>空回滚 = Cancel 在 Try 之前到达，Cancel 时根本没有 Try 产生的数据可以回滚。</strong><br><br>
+    <strong>发生场景：</strong><br>
+    ① TCC 框架调用参与者的 Try 方法，但由于网络超时，框架认为 Try 失败；<br>
+    ② 框架立即调用 Cancel 进行补偿；<br>
+    ③ 实际上 Try 请求还在网络中（或者根本没到达参与者），Cancel 先到达了。<br><br>
+    <strong>问题：</strong>Cancel 找不到 Try 创建的事务记录，如果直接报错会导致事务悬而未决。<br><br>
+    <strong>解决方案：</strong></p>
+    <pre data-lang="java"><code>// Cancel 方法中处理空回滚
+@Transactional
+public boolean cancelTransfer(String txId, ...) {
+    TccRecord record = txMapper.selectByTxId(txId);
+
+    // 空回滚判断：Try 从未执行过（无记录）
+    if (record == null) {
+        // 插入一条 CANCELLED 状态记录（防止后续 Try 悬挂）
+        txMapper.insert(new TccRecord(txId, TccStatus.CANCELLED, amount));
+        return true; // 直接返回成功，不做任何回滚操作
+    }
+
+    // 正常回滚逻辑...
+    accountMapper.unfreeze(fromId, amount);
+    txMapper.updateStatus(txId, TccStatus.CANCELLED);
+    return true;
+}</code></pre>
+    <p><strong>核心思路：</strong>Cancel 时如果发现没有 Try 记录，说明是空回滚，直接返回成功并记录状态（为后续防悬挂做准备）。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>"悬挂"是什么？它和空回滚有什么关系？</p></div>
+  <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span>
+    <p><strong>悬挂 = Try 在 Cancel 之后到达，导致资源被永久冻结。</strong><br><br>
+    <strong>发生场景（紧接空回滚之后）：</strong><br>
+    ① 框架调用 Try 超时 → 触发 Cancel（空回滚已处理） → 事务结束；<br>
+    ② 但原来那个 Try 请求其实只是网络延迟，现在终于到达参与者了；<br>
+    ③ 如果 Try 正常执行——冻结了资源——但此时事务已经结束，不会再有 Confirm 或 Cancel 来释放它；<br>
+    ④ 资源被<strong>永久冻结</strong>，用户的钱被"悬挂"住了。<br><br>
+    <strong>解决方案：</strong></p>
+    <pre data-lang="java"><code>// Try 方法中防悬挂
+@Transactional
+public boolean tryTransfer(String txId, ...) {
+    // 防悬挂：检查是否已有 Cancel 记录
+    TccRecord record = txMapper.selectByTxId(txId);
+    if (record != null &amp;&amp; record.getStatus() == TccStatus.CANCELLED) {
+        return false; // 已取消，拒绝执行 Try！
+    }
+
+    // 正常 Try 逻辑：冻结资源
+    accountMapper.freezeAmount(fromId, amount);
+    txMapper.insert(new TccRecord(txId, TccStatus.TRYING, amount));
+    return true;
+}</code></pre>
+    <p><strong>核心思路：</strong>Try 执行前先查事务状态表，如果发现已有 CANCELLED 记录（说明 Cancel 先到了），
+    则拒绝执行 Try，避免资源悬挂。<br><br>
+    <strong>空回滚和悬挂的关系：</strong>空回滚时必须插入 CANCELLED 记录，就是为了给后续的 Try 一个"拒绝执行"的依据。
+    两者是配套的防御机制。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>TCC 的幂等问题怎么保证？Confirm 和 Cancel 为什么必须幂等？</p></div>
+  <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span>
+    <p><strong>原因：TCC 框架在 Confirm/Cancel 失败时会自动重试，重复调用是必然发生的。</strong><br><br>
+    <strong>场景：</strong><br>
+    ① Confirm 执行成功，但返回 ACK 的网络包丢了 → 框架认为失败 → 再次调用 Confirm；<br>
+    ② 如果 Confirm 没有幂等保护 → 重复扣减冻结金额 → 账户余额错误！<br><br>
+    <strong>解决方案：事务状态表 + 执行前检查</strong></p>
+    <pre data-lang="java"><code>// Confirm 幂等实现
+@Transactional
+public boolean confirmTransfer(String txId, ...) {
+    TccRecord record = txMapper.selectByTxId(txId);
+
+    // 幂等检查：已确认过则直接返回成功
+    if (record == null || record.getStatus() == TccStatus.CONFIRMED) {
+        return true; // 重复调用，直接返回
+    }
+
+    // 状态校验：只有 TRYING 状态才能流转到 CONFIRMED
+    if (record.getStatus() != TccStatus.TRYING) {
+        throw new IllegalStateException("非法状态: " + record.getStatus());
+    }
+
+    // 执行确认逻辑
+    accountMapper.deductFrozen(fromId, amount);
+    accountMapper.confirmPending(toId, amount);
+    txMapper.updateStatus(txId, TccStatus.CONFIRMED);
+    return true;
+}</code></pre>
+    <p><strong>三大异常的统一解决模型：一张事务控制表</strong><br><br>
+    核心就是一张 <code>tcc_transaction</code> 表，记录每个事务 ID 的当前状态。
+    所有 Try/Confirm/Cancel 操作执行前都先查这张表：<br>
+    - Try 前查：有 CANCELLED → 拒绝（防悬挂）<br>
+    - Cancel 前查：无记录 → 空回滚（插入 CANCELLED）<br>
+    - Confirm/Cancel 前查：已是终态 → 幂等返回</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>你们信贷系统的 TCC 是怎么落地的？遇到过三大异常吗？</p></div>
+  <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span>
+    <p><strong>我们在放款链路使用 TCC：</strong><br><br>
+    <strong>业务场景：</strong>用户授信通过后申请放款 → 需要同时操作：①额度服务扣减可用额度 ②资金服务发起打款。
+    两者必须要么都成功，要么都回滚。<br><br>
+    <strong>TCC 设计：</strong><br>
+    - Try：额度服务冻结放款金额（available -= amount, frozen += amount）；资金服务创建打款工单（状态=PENDING）<br>
+    - Confirm：额度服务扣减冻结（frozen -= amount）；资金服务确认打款（状态=PROCESSING→调用银行）<br>
+    - Cancel：额度服务解冻（frozen -= amount, available += amount）；资金服务作废工单（状态=CANCELLED）<br><br>
+    <strong>遇到的异常：</strong><br>
+    ①<strong>空回滚（遇到过）：</strong>有一次额度服务升级重启，Try 请求超时，框架触发了 Cancel。
+    因为我们代码有空回滚判断，Cancel 正常返回，没有影响。<br>
+    ②<strong>悬挂（差点遇到）：</strong>压测时发现网络延迟导致 Try 在 Cancel 之后到达，
+    幸好有防悬挂检查，Try 被拒绝执行。如果没有这个检查，额度会被永久冻结。<br>
+    ③<strong>幂等重试（经常发生）：</strong>Confirm 调用银行接口超时是常态（银行响应慢），
+    框架重试 Confirm 是高频操作，幂等检查每天触发数百次。</p>
+  </div>
+</div>
+
+<div class="callout tip">
+  <p><strong>项目结合话术</strong>："我们信贷放款链路用 TCC 保证额度扣减和资金打款的一致性。
+  三大异常我们都在代码里做了防护——通过一张 tcc_transaction 控制表统一解决：
+  Try 前查防悬挂，Cancel 前查防空回滚，所有操作前查防重复执行。
+  生产环境运行一年多，空回滚出现过几十次（都是网络抖动），悬挂被拦截过 3 次，幂等重试每天触发数百次。
+  核心是：TCC 的难点不在正常流程，而在异常分支的防御性编程。"</p>
+</div>
+
+<div class="callout warn">
+  <p><strong>踩坑警告</strong>：<br>
+  ① 很多候选人只知道"空回滚就是 Cancel 在 Try 之前"，但说不出解决方案（插入 CANCELLED 记录）；<br>
+  ② 悬挂和空回滚必须配套实现——如果只处理空回滚不防悬挂，等于只做了一半；<br>
+  ③ TCC 事务控制表建议加 <code>UNIQUE KEY (tx_id, branch_id)</code>，利用数据库唯一索引做最后一道防线；<br>
+  ④ 不要在 Try 阶段做不可逆操作（如发短信、调外部 API），否则 Cancel 无法真正回滚。</p>
 </div>
 
 <!-- ===== SAGA ===== -->
@@ -1111,6 +1332,166 @@ ATM 取款：按 1 次取 100，按 2 次就取了 200！
 
 <div class="callout tip">
   <p><strong>面试加分回答：</strong>"幂等设计的核心原则是<strong>全局唯一标识 + 执行前检查 + 原子性保证</strong>。不同方案本质都是围绕这三点展开，区别在于'唯一标识从哪来'和'检查的存储介质是什么'。"</p>
+</div>
+
+<h3>幂等设计深度追问链</h3>
+
+<div class="qa">
+  <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>五种幂等方案各自的适用场景是什么？如何选择？</p></div>
+  <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span>
+    <p><strong>选型决策路径：</strong><br><br>
+    五种最常用的幂等方案（与上表一致）：<strong>唯一索引、Token 机制、乐观锁（CAS/版本号）、状态机、去重表</strong>。分布式锁也可作为辅助手段但不推荐作为主要幂等方案（因为锁超时可能导致重复执行）。<br><br>
+    <strong>①数据库唯一索引</strong> — 最简单直接<br>
+    - 原理：利用 DB UNIQUE KEY 约束，重复插入抛 DuplicateKeyException<br>
+    - 适用：<strong>创建类操作</strong>（订单创建、用户注册、消息消费记录）<br>
+    - 限制：只能用于 INSERT 场景，不适用 UPDATE<br><br>
+    <strong>②Token 机制</strong> — 前端防重<br>
+    - 原理：页面加载时获取 Token → 提交时 Redis SETNX 验证并删除 → 重复提交时 Token 已不存在<br>
+    - 适用：<strong>表单提交、按钮防重复点击</strong><br>
+    - 限制：需要前后端配合，Token 有过期时间窗口<br><br>
+    <strong>③乐观锁（CAS/版本号）</strong> — 并发更新防重<br>
+    - 原理：UPDATE ... WHERE version = #{oldVersion}，版本号不匹配则更新失败<br>
+    - 适用：<strong>余额扣减、库存更新</strong>等高并发更新场景<br>
+    - 限制：高并发下大量重试，需配合自旋或退避策略<br><br>
+    <strong>④状态机</strong> — 业务语义防重<br>
+    - 原理：只有特定状态才允许流转（INIT→PAYING→SUCCESS），已到终态则拒绝操作<br>
+    - 适用：<strong>有明确生命周期的业务对象</strong>（订单、支付单、审批流）<br>
+    - 优势：最贴合业务语义，自然防重且能发现异常调用<br><br>
+    <strong>⑤去重表</strong> — 通用防重<br>
+    - 原理：记录已处理的请求ID，重复请求直接返回之前的结果<br>
+    - 适用：<strong>消息消费、RPC 调用</strong>等任何操作<br>
+    - 限制：需维护去重表，有存储开销<br><br>
+    <em>注：分布式锁可作为并发拦截的辅助手段（如防止用户快速双击），但因锁超时可能导致重复执行，不应作为主要幂等保证。</em></p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>你们系统的"三层幂等"是怎么设计的？为什么要三层而不是一层？</p></div>
+  <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span>
+    <p><strong>我们信贷系统的三层幂等体系：</strong><br><br>
+    <strong>第一层：数据库唯一索引（兜底层）</strong></p>
+    <pre data-lang="sql"><code>-- 授信申请表：同一用户同一产品不能重复申请（业务去重）
+CREATE UNIQUE INDEX uk_user_product ON credit_apply(user_id, product_code, apply_date);
+
+-- 放款记录表：同一授信编号只能放款一次
+CREATE UNIQUE INDEX uk_credit_no ON loan_record(credit_no);</code></pre>
+    <p><strong>第二层：分布式锁（并发拦截层）</strong></p>
+    <pre data-lang="java"><code>// 放款接口入口 — Redis 分布式锁
+public Result applyLoan(String creditNo) {
+    String lockKey = "loan:lock:" + creditNo;
+    boolean locked = redis.opsForValue()
+        .setIfAbsent(lockKey, "1", 30, TimeUnit.SECONDS);
+    if (!locked) {
+        return Result.fail("请勿重复提交，放款处理中");
+    }
+    try {
+        return loanService.doLoan(creditNo);
+    } finally {
+        redis.delete(lockKey);
+    }
+}</code></pre>
+    <p><strong>第三层：状态机（业务语义层）</strong></p>
+    <pre data-lang="java"><code>// 放款服务内部 — 状态机校验
+public Result doLoan(String creditNo) {
+    CreditRecord credit = creditMapper.selectByCreditNo(creditNo);
+
+    // 状态机：只有 APPROVED 状态才能发起放款
+    if (credit.getStatus() != CreditStatus.APPROVED) {
+        if (credit.getStatus() == CreditStatus.LOAN_SUCCESS) {
+            return Result.success("已放款，幂等返回"); // 幂等
+        }
+        throw new BizException("当前状态不允许放款: " + credit.getStatus());
+    }
+
+    // CAS 更新状态（乐观锁）
+    int rows = creditMapper.updateStatus(
+        creditNo, CreditStatus.LOANING, CreditStatus.APPROVED, credit.getVersion());
+    if (rows == 0) {
+        throw new ConcurrentException("并发冲突，请重试");
+    }
+    // ... 执行放款逻辑
+}</code></pre>
+    <p><strong>为什么要三层？</strong><br>
+    - <strong>唯一索引</strong>是最后一道防线，即使前两层都失效也能兜住（DB 层面保证）<br>
+    - <strong>分布式锁</strong>解决毫秒级并发重复请求（用户双击、网关重试）<br>
+    - <strong>状态机</strong>解决业务层面的语义重复（如已放款不能再放）<br><br>
+    三者各管一个层面：锁管并发、状态机管业务、唯一索引管数据。任何一层失效都有其他层兜底。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>分布式锁做幂等有什么风险？锁超时了业务还没执行完怎么办？</p></div>
+  <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span>
+    <p><strong>分布式锁的三大风险：</strong><br><br>
+    <strong>①锁超时但业务未完成（最危险）：</strong><br>
+    - 场景：锁设 30s 超时，但放款接口调用银行耗时 35s，锁自动释放了<br>
+    - 后果：另一个请求获取到锁，开始执行，导致重复放款<br>
+    - 解决：Redisson 看门狗（WatchDog）自动续期 + 状态机双重校验<br><br>
+    <strong>②Redis 主从切换丢锁：</strong><br>
+    - 场景：写入 Master 成功，但还没同步到 Slave 时 Master 宕机<br>
+    - 后果：新 Master 没有这把锁，其他请求可以获取<br>
+    - 解决：RedLock 算法（向 N/2+1 个节点加锁）或用 ZooKeeper 替代<br><br>
+    <strong>③死锁 / 锁泄漏：</strong><br>
+    - 场景：获取锁后程序 OOM 崩溃，finally 中的 unlock 没执行<br>
+    - 解决：必须设置过期时间（TTL），宁可锁超时释放也不能死锁<br><br>
+    <strong>我们的做法：</strong>分布式锁只是快速拦截层，不依赖它保证正确性。
+    即使锁失效导致重复请求穿透，后面的状态机和唯一索引仍然能兜住。
+    这就是三层幂等的价值——不把鸡蛋放在一个篮子里。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div class="qa-question"><span class="qa-badge qa-badge-q">Q</span><p>消息消费场景的幂等怎么做？和接口幂等有什么区别？</p></div>
+  <div class="qa-answer"><span class="qa-badge qa-badge-a">A</span>
+    <p><strong>消息消费幂等的特殊性：</strong><br><br>
+    接口幂等通常由调用方提供唯一 ID（如 requestId），但消息消费的"重复"来源不同：<br>
+    - MQ 投递重复（Broker 未收到 ACK，重新投递）<br>
+    - 消费者重启导致 offset 回退<br>
+    - 人工重置 offset 重新消费<br><br>
+    <strong>消费幂等的标准实现：</strong></p>
+    <pre data-lang="java"><code>@PulsarListener(topics = "credit-approved")
+public void onCreditApproved(Message&lt;String&gt; msg) {
+    String msgId = msg.getMessageId().toString();
+    String bizKey = JSON.parseObject(msg.getValue()).getString("creditNo");
+
+    // 第一层：Redis 快速去重（减少 DB 压力）
+    if (!redis.opsForValue().setIfAbsent("consumed:" + msgId, "1", 7, TimeUnit.DAYS)) {
+        log.info("重复消息，跳过: {}", msgId);
+        return; // 幂等返回
+    }
+
+    try {
+        // 第二层：业务处理（内含状态机校验）
+        creditService.processApproval(bizKey);
+    } catch (DuplicateKeyException e) {
+        // 第三层：唯一索引兜底
+        log.warn("数据库层面拦截重复: {}", bizKey);
+    } catch (Exception e) {
+        // 处理失败，删除 Redis 标记让下次重试能进来
+        redis.delete("consumed:" + msgId);
+        throw e; // 抛出让 MQ 重试
+    }
+}</code></pre>
+    <p><strong>和接口幂等的区别：</strong><br>
+    - 接口幂等的 ID 由调用方生成（requestId），消息幂等用 messageId 或业务 Key<br>
+    - 消息消费失败需要支持重试，所以去重标记要在<strong>成功后才持久化</strong>，失败时要清除<br>
+    - 消息可能延迟到达（积压），去重窗口要够长（我们设 7 天 TTL）</p>
+  </div>
+</div>
+
+<div class="callout tip">
+  <p><strong>项目结合话术</strong>："我们信贷系统的幂等是三层防线：入口用 Redis 分布式锁拦截并发重复请求（毫秒级），
+  业务层用状态机校验当前状态是否允许操作（语义级），数据层用唯一索引做最终兜底（DB级）。
+  消息消费场景额外加了 messageId 的 Redis 去重。这套方案上线两年，从未发生过重复放款事故。
+  核心原则是：任何单层都可能失效，但三层同时失效的概率趋近于零。"</p>
+</div>
+
+<div class="callout warn">
+  <p><strong>踩坑警告</strong>：<br>
+  ① 不要只用 Redis 做幂等——Redis 有丢数据的可能（主从切换、AOF 重写丢失），必须有 DB 唯一索引兜底；<br>
+  ② Token 机制的 Token 必须一次性使用（验证后立即删除），不能用"查询是否存在"代替"原子删除"——后者有并发窗口；<br>
+  ③ 乐观锁不适合高冲突场景——如果 10 个请求同时更新同一条记录，只有 1 个成功，其他 9 个都要重试，TPS 急剧下降；<br>
+  ④ 幂等的前提是"相同的请求"——必须先定义清楚什么算"相同"：是 requestId 相同？还是 userId + 业务参数相同？定义不准会漏防。</p>
 </div>
 
 </section>
